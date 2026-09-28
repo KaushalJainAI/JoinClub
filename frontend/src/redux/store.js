@@ -1,13 +1,7 @@
 import { configureStore } from "@reduxjs/toolkit";
-import authSlice from "./authSlice";
-import clubSlice from "./clubSlice";
-import companySlice from "./clubSlice";
+import auth from "./authSlice";
 
-const store = configureStore({
-    reducer:{
-        auth:authSlice,
-        club:clubSlice,
-        company:companySlice,
-    }
-});
-export default store; 
+// Page data is fetched per page (see hooks/useFetch); only the session lives in Redux.
+const store = configureStore({ reducer: { auth } });
+
+export default store;

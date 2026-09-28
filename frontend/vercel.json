@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "comment": "VITE_API_URL points at the backend. The rewrites send link previews, robots.txt and sitemap.xml to the same backend; everything else is the SPA. See docs/runbooks/seo.md for the nginx equivalent.",
+  "rewrites": [
+    { "source": "/robots.txt", "destination": "$API/preview/robots.txt" },
+    { "source": "/sitemap.xml", "destination": "$API/preview/sitemap.xml" },
+    { "source": "/clubs/:slug", "destination": "$API/preview/clubs/:slug" },
+    { "source": "/openings/:id", "destination": "$API/preview/openings/:id" },
+    { "source": "/api/:path*", "destination": "$API/api/:path*" }
+  ]
+}

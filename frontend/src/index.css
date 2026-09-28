@@ -1,4 +1,100 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-  
+
+@layer base {
+  :root {
+    /* PEC navy + warm saffron accent */
+    --background: 220 33% 99%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 221 70% 24%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 30% 95%;
+    --secondary-foreground: 221 60% 22%;
+    --accent: 24 95% 53%;
+    --accent-foreground: 0 0% 100%;
+    --muted: 220 25% 95%;
+    --muted-foreground: 220 12% 42%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 60% 36%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 45%;
+    --warning-foreground: 0 0% 100%;
+    --border: 220 20% 89%;
+    --input: 220 20% 86%;
+    --ring: 221 70% 40%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 224 30% 7%;
+    --foreground: 220 20% 94%;
+    --card: 224 26% 10%;
+    --card-foreground: 220 20% 94%;
+    --popover: 224 26% 11%;
+    --popover-foreground: 220 20% 94%;
+    --primary: 217 90% 68%;
+    --primary-foreground: 224 40% 10%;
+    --secondary: 223 22% 16%;
+    --secondary-foreground: 220 20% 90%;
+    --accent: 24 95% 58%;
+    --accent-foreground: 224 40% 10%;
+    --muted: 223 20% 15%;
+    --muted-foreground: 220 12% 64%;
+    --destructive: 0 70% 58%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 55% 48%;
+    --success-foreground: 224 40% 10%;
+    --warning: 38 92% 56%;
+    --warning-foreground: 224 40% 10%;
+    --border: 223 18% 20%;
+    --input: 223 18% 24%;
+    --ring: 217 90% 68%;
+  }
+
+  * {
+    @apply border-border;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+  }
+  h1, h2, h3, h4 {
+    @apply font-display tracking-tight;
+  }
+}
+
+@layer components {
+  .page {
+    @apply container py-8 md:py-12;
+  }
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-[0.14em] text-accent;
+  }
+  .section-title {
+    @apply text-2xl font-bold md:text-3xl;
+  }
+  .hero-grid {
+    background-image: radial-gradient(hsl(var(--primary) / 0.12) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+}
+
+/* Markdown inside chat bubbles */
+.prose-chat p { @apply my-2 leading-relaxed first:mt-0 last:mb-0; }
+.prose-chat ul { @apply my-2 list-disc space-y-1 pl-5; }
+.prose-chat ol { @apply my-2 list-decimal space-y-1 pl-5; }
+.prose-chat a { @apply font-medium text-primary underline underline-offset-2; }
+.prose-chat strong { @apply font-semibold; }
+.prose-chat hr { @apply my-3 border-border; }
+.prose-chat h3, .prose-chat h4 { @apply mb-1 mt-3 text-base font-semibold; }
+.prose-chat code { @apply rounded bg-muted px-1 py-0.5 text-[0.85em]; }
