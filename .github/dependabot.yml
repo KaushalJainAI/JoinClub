@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # Both package.json files are separate npm projects, so they are listed separately.
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One pull request for the patch bumps, so Dependabot does not open ten.
+      patch-and-minor-patches:
+        update-types: [minor, patch]
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      patch-and-minor-patches:
+        update-types: [minor, patch]
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

@@ -1,0 +1,81 @@
+name: CI
+
+# Every push and pull request runs the backend tests, the frontend lint and build, and a
+# production-dependency audit. Nothing here needs a secret: the tests start their own
+# database, and no test calls the AI or the mailer.
+on:
+  push:
+    branches: [main, "rewrite/**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      mongo:
+        image: mongo:7
+        ports: ["27017:27017"]
+        # The suite drops its database, so wait until the server actually accepts queries.
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      # A service container is faster and lighter than downloading a mongod binary.
+      - name: Test
+        env:
+          TEST_MONGO_URI: mongodb://127.0.0.1:27017/
+        run: npm test
+      - name: Lint the offline AI wiring check still runs
+        run: npm run check:llm
+
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci --omit=dev
+      # Only production dependencies: a vulnerable dev tool does not ship. See the
+      # `overrides` block in package.json for the rate-limit-mongo/underscore exception.
+      - run: npm audit --omit=dev --audit-level=high
