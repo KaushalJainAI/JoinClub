@@ -1,152 +1,112 @@
+import { z } from "zod";
+import mongoose from "mongoose";
 import { User } from "../model/user.model.js";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-export const register = async (req, res) => {
-  try {
-    const { fullname, email, phoneNumber, password, role } = req.body;
-    if (!fullname || !email || !phoneNumber || !password || !role) {
-      return res.status(400).json({
-        message: "Something is missing",
-        sucess: false,
-      });
-    }
-    const user = await User.findOne({ email });
-    if (user) {
-      return res.status(400).json({
-        message: "User already exist",
-        success: false,
-      });
-    }
-    const hashedPassword = await bcrypt.hash(password, 10);
-    await User.create({
-      fullname,
-      email,
-      phoneNumber,
-      password: hashedPassword,
-      role,
-    });
-    return res.status(201).json({
-      message: "Account created successfully",
-      success: true,
-    });
-  } catch (error) {
-    console.log(error);
+import { Application } from "../model/application.model.js";
+import { ChatSession, ChatMessage, CHAT_RETENTION_DAYS } from "../model/chat.model.js";
+import { Club } from "../model/club.model.js";
+import { clearAuthCookie } from "../middlewares/auth.js";
+import { HttpError } from "../utils/http.js";
+import { uploadFile } from "../utils/cloudinary.js";
+
+export const updateProfile = async (req, res) => {
+  const user = await User.findById(req.id);
+  if (!user) throw new HttpError(404, "User not found.");
+
+  const { fullname, email, phoneNumber, bio, skills, interests, branch, year, sid, consentAi, aiApplicantSummary } = req.body;
+  if (email && email !== user.email) {
+    if (await User.exists({ email })) throw new HttpError(400, "That email is already in use.");
+    user.email = email;
   }
+  if (fullname !== undefined) user.fullname = fullname;
+  if (phoneNumber !== undefined) user.phoneNumber = phoneNumber;
+  if (bio !== undefined) user.profile.bio = bio;
+  if (skills !== undefined) user.profile.skills = skills;
+  if (interests !== undefined) user.profile.interests = interests;
+  if (branch !== undefined) user.profile.branch = branch;
+  if (year !== undefined) user.profile.year = year;
+  if (sid !== undefined) user.profile.sid = sid;
+  // Consent and the AI opt-out are privacy choices, so they are timestamped and revocable.
+  if (consentAi !== undefined) {
+    user.consentAi = Boolean(consentAi);
+    user.consentAiAt = user.consentAi ? new Date() : null;
+  }
+  if (aiApplicantSummary !== undefined) user.aiApplicantSummary = Boolean(aiApplicantSummary);
+
+  const photo = req.files?.file?.[0];
+  const resume = req.files?.resume?.[0];
+  if (photo) user.profile.profilePhoto = await uploadFile(photo, "joinclub/avatars");
+  if (resume) {
+    user.profile.resume = await uploadFile(resume, "joinclub/resumes");
+    user.profile.resumeOriginalName = resume.originalname;
+  }
+
+  await user.save();
+  res.json({ success: true, message: "Profile updated.", user: user.toJSON() });
 };
-export const login = async (req, res) => {
-  try {
-    const { email, password, role } = req.body;
-    if (!email || !password || !role) {
-      return res.status(400).json({
-        message: "Something is missing",
-        success: false,
-      });
-    }
-    let user = await User.findOne({ email });
-    if (!user) {
-      return res.status(400).json({
-        message: "Invalid credentials",
-        success: false,
-      });
-    }
-    const isPasswordMatch = await bcrypt.compare(password, user.password);
-    if (!isPasswordMatch) {
-      return res.status(400).json({
-        message: "Invalid credentials",
-        success: false,
-      });
-    }
-    if (role != user.role) {
-      return res.status(400).json({
-        message: "Account does not exit with current role",
-        success: false,
-      });
-    }
-    const tokenData = {
-      userId: user._id,
-      role:user.role,
-    };
-    const token = await jwt.sign(tokenData, process.env.SECRET_KEY, {
-      expiresIn: "1d",
-    });
-    user = {
-      _id: user._id,
-      fullname: user.fullname,
-      email: user.email,
-      phoneNumber: user.phoneNumber,
-      role: user.role,
-      profile: user.profile,
-    };
-    return res
-      .status(200)
-      .cookie("token", token, {
-        maxAge: 1 * 24 * 60 * 60 * 1000,
-        httpOnly: true,
-        sameSite: "strict",
-      })
-      .json({
-        message: `Welcome back ${user.fullname}`,
-        user,
-        success: true,
-      });
-  } catch (error) {
-    console.log("server issue");
-  }
+
+// ---------- privacy: export and erase ----------
+
+// Everything we hold about one student, as JSON, so it can be read without the UI.
+export const exportMyData = async (req, res) => {
+  const user = await User.findById(req.id).populate("club", "name slug").lean();
+  if (!user) throw new HttpError(404, "User not found.");
+
+  const [applications, sessions] = await Promise.all([
+    Application.find({ applicant: req.id })
+      .populate("opening", "title deadline mode status")
+      .populate("club", "name slug")
+      .lean(),
+    ChatSession.find({ user: req.id }).select("title mode createdAt updatedAt meta").lean(),
+  ]);
+  const messages = sessions.length ? await ChatMessage.find({ session: { $in: sessions.map((s) => s._id) } }).sort({ createdAt: 1 }).lean() : [];
+
+  const { password, tokenVersion, __v, ...safe } = user;
+  res.json({
+    success: true,
+    exportedAt: new Date().toISOString(),
+    note: "AI features send parts of this data (your profile and application answers) to Anthropic to generate suggestions. See /privacy.",
+    user: safe,
+    applications: applications.map((a) => ({ ...a, adminNote: undefined })),
+    chats: sessions.map((s) => ({ ...s, messages: messages.filter((m) => String(m.session) === String(s._id)) })),
+  });
 };
-export const logout = async (req, res) => {
-  try {
-    return res.status(200).cookie("token", "", { maxAge: 0 }).json({
-      message: "Logged OUt",
-      success: true,
-    });
-  } catch (error) {
-    console.log(error);
-  }
+
+/**
+ * Deletes the account. Applications stay, because the club that received them has a
+ * record of the recruitment: the applicant is replaced with an anonymised placeholder and
+ * the answers are dropped. Chats are deleted outright.
+ */
+export const deleteMyAccount = async (req, res) => {
+  const user = await User.findById(req.id);
+  if (!user) throw new HttpError(404, "User not found.");
+  if (user.role === "super_admin") throw new HttpError(400, "The super admin account can't be deleted here.");
+
+  const applications = await Application.find({ applicant: req.id }).select("_id").lean();
+  const sessionIds = await ChatSession.find({ user: req.id }).select("_id").lean();
+  // A placeholder id, not null: the unique {opening, applicant} index treats every null as
+  // the same value, which would block a later applicant from the same opening.
+  const anonymousId = new mongoose.Types.ObjectId();
+
+  await Promise.all([
+    // Keeps the club's count and status history, drops the personal answers.
+    Application.updateMany(
+      { applicant: req.id },
+      { $set: { answers: [], applicant: anonymousId, applicantDeleted: true, adminNote: "" } }
+    ),
+    Club.updateMany({ followers: req.id }, { $pull: { followers: req.id } }),
+    ChatMessage.deleteMany({ session: { $in: sessionIds.map((s) => s._id) } }),
+    ChatSession.deleteMany({ user: req.id }),
+  ]);
+
+  await user.deleteOne();
+  clearAuthCookie(res);
+  res.json({
+    success: true,
+    message: `Account deleted. ${applications.length} application${applications.length === 1 ? "" : "s"} were kept without your name or answers, as the clubs that received them need that record.`,
+  });
 };
-export const UpdateProfile = async (req,res)=>{
-  try {
-    const { fullname, email, phoneNumber,bio,skills} = req.body;
-        const userId = req.id; // middleware authentication
-        let user = await User.findOne({email});
-       
-        let skillsArray;
-        if(skills){
-            skillsArray = skills.split(",");
-        }
-        // if (!user) {
-        //     return res.status(400).json({
-        //         message: "User not found.",
-        //         success: false
-        //     })
-        // }
-        // updating data
-        if(fullname) user.fullname = fullname
-        if(email) user.email = email
-        if(phoneNumber)  user.phoneNumber = phoneNumber
-        if(bio) user.profile.bio = bio
-        if(skills) user.profile.skills = skillsArray
-      
-        // resume comes later here...
-  
 
-
-        //await user.save();
-
-        user = {
-            _id: user._id,
-            fullname: user.fullname,
-            email: user.email,
-            phoneNumber: user.phoneNumber,
-            role: user.role,
-            profile: user.profile
-        }
-
-        return res.status(200).json({
-            message:"Profile updated successfully.",
-            user,
-            success:true
-        })
-  } catch (error) {
-    console.log(error);
-  }
-}
+export const privacySettingsSchema = z.object({
+  consentAi: z.boolean().optional(),
+  aiApplicantSummary: z.boolean().optional(),
+});
