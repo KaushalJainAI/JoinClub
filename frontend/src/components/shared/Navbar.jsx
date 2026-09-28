@@ -40,7 +40,7 @@ export const Navbar = () => {
       <div className="flex items-center justify-between mx-auto my-10 max-w-5xl h-15">
         <div>
           <h1 className="text-2xl font-bold">
-            <Link to="/">ClubSpot<span className="text-2xl font-bold text-red-600">PEC</span></Link>
+            <Link to="/">JoinClub<span className="text-2xl font-bold text-red-600">PEC</span></Link>
           </h1>
         </div>
         <div className="flex items-center gap-12">

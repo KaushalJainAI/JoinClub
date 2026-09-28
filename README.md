@@ -1,4 +1,4 @@
-# ClubSpot
+# JoinClub
 
 A full-stack application with a Node/Express backend and a React/Vite frontend.
 
