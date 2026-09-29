@@ -18,6 +18,8 @@ function DailyBars({ days }) {
     <div>
       <div className="relative flex h-40 items-end gap-[2px] border-b border-border" role="img" aria-label={`Applications per day: ${days.map((d) => `${label(d.date)} ${d.count}`).join(", ")}`}>
         {days.map((d, i) => (
+          // Mouse-only tooltip: keyboard and screen-reader users get every value from the chart's aria-label.
+          // eslint-disable-next-line jsx-a11y/no-static-element-interactions
           <div key={d.date} className="group relative flex h-full flex-1 items-end" onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
             {/* The hit target is the full column, larger than the bar itself. */}
             <div className="mx-auto w-full max-w-[22px] rounded-t-[4px] bg-primary transition-opacity" style={{ height: `${(d.count / max) * 100}%`, minHeight: d.count ? 3 : 0, opacity: hover === null || hover === i ? 1 : 0.45 }} />

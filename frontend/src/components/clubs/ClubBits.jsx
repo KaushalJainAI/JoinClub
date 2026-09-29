@@ -3,14 +3,14 @@ import { Link } from "react-router-dom";
 import { ArrowUpRight, CalendarDays, Clock, MapPin, Users, Heart } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { categoryMeta, STATUS_META, MODE_META } from "@/lib/categories";
-import { cn, formatDateTime, initials, timeLeft } from "@/lib/utils";
+import { cdnImg, cn, formatDateTime, initials, timeLeft } from "@/lib/utils";
 
 // The club's logo, or its initials on its colour if the image is missing or broken.
 export function ClubLogo({ club, className }) {
   const [broken, setBroken] = useState(false);
   const color = club?.color || categoryMeta(club?.category).color;
   if (club?.logo && !broken) {
-    return <img src={club.logo} alt="" onError={() => setBroken(true)} className={cn("h-12 w-12 shrink-0 rounded-xl border bg-white object-contain p-1", className)} loading="lazy" />;
+    return <img src={cdnImg(club.logo, 96)} alt="" onError={() => setBroken(true)} className={cn("h-12 w-12 shrink-0 rounded-xl border bg-white object-contain p-1", className)} loading="lazy" />;
   }
   return (
     <div className={cn("grid h-12 w-12 shrink-0 place-items-center rounded-xl font-display text-sm font-extrabold text-white", className)} style={{ background: color }}>
@@ -52,7 +52,7 @@ export function ClubCard({ club, className }) {
       className={cn("group relative flex flex-col overflow-hidden rounded-2xl border bg-card shadow-soft transition-all hover:-translate-y-1 hover:shadow-lift", className)}
     >
       <div className="relative h-24 overflow-hidden" style={{ background: `linear-gradient(135deg, ${color}, ${color}99)` }}>
-        {club.cover && <img src={club.cover} alt="" loading="lazy" className="h-full w-full object-cover opacity-80 transition-transform duration-500 group-hover:scale-105" onError={(e) => (e.currentTarget.style.display = "none")} />}
+        {club.cover && <img src={cdnImg(club.cover, 400)} alt="" loading="lazy" className="h-full w-full object-cover opacity-80 transition-transform duration-500 group-hover:scale-105" onError={(e) => (e.currentTarget.style.display = "none")} />}
         <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
         {club.openCount > 0 && (
           <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-full bg-white/95 px-2.5 py-1 text-xs font-bold text-success shadow">

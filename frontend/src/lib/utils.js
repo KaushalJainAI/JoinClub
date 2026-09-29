@@ -5,7 +5,22 @@ export function cn(...inputs) {
   return twMerge(clsx(inputs));
 }
 
-export const initials = (name = "") =>
+/**
+ * A Cloudinary image at the size it is shown, in the best format the browser supports.
+ * `width` is the CSS width; twice that is requested so screens with 2x pixels stay sharp,
+ * but never more than the 1600 px the server keeps (a bigger `w_` would upscale).
+ * URLs that aren't Cloudinary's (pec.ac.in, DiceBear) are returned unchanged, as are ones
+ * that already carry a transformation.
+ */
+export function cdnImg(url, width) {
+  if (!url || !width || !url.includes("res.cloudinary.com") || !url.includes("/image/upload/")) return url;
+  const [head, tail] = url.split("/image/upload/");
+  // A transformation is a path segment like "w_200,c_fill"; a version is "v1712345".
+  if (/^[a-z]{1,3}_[^/]*\//.test(tail)) return url;
+  return `${head}/image/upload/f_auto,q_auto,w_${Math.min(1600, Math.round(width * 2))}/${tail}`;
+}
+
+export const initials =(name = "") =>
   name
     .split(/\s+/)
     .filter(Boolean)

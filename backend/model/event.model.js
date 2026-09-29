@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const eventSchema = new mongoose.Schema(
   {
-    club: { type: mongoose.Schema.Types.ObjectId, ref: "Club", required: true, index: true },
+    club: { type: mongoose.Schema.Types.ObjectId, ref: "Club", required: true },
     title: { type: String, required: true, trim: true },
     description: { type: String, default: "" },
     date: { type: Date, required: true, index: true },
@@ -12,4 +12,7 @@ const eventSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export const Event = mongoose.model("Event", eventSchema);
+// One club's upcoming events, soonest first (club page, dashboard, admin events).
+eventSchema.index({ club: 1, date: 1 });
+
+export const Event =mongoose.model("Event", eventSchema);

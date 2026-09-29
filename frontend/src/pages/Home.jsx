@@ -12,9 +12,10 @@ export default function Home() {
   const navigate = useNavigate();
   const [q, setQ] = useState("");
   const { data: stats } = useFetch("/stats");
-  const { data: clubs, loading: clubsLoading } = useFetch("/clubs?sort=popular");
-  const { data: openings, loading: openingsLoading } = useFetch("/openings");
-  const { data: events } = useFetch("/events");
+  // Ask for what the page shows: 8 clubs, 6 openings, 4 events.
+  const { data: clubs, loading: clubsLoading } = useFetch("/clubs?sort=popular&limit=8");
+  const { data: openings, loading: openingsLoading } = useFetch("/openings?limit=6");
+  const { data: events } = useFetch("/events?limit=4");
   const { data: cats } = useFetch("/clubs/categories");
   const catCount = Object.fromEntries((cats?.categories || []).map((c) => [c.category, c.count]));
 

@@ -34,7 +34,7 @@ import {
 import { useFetch } from "@/hooks/useFetch";
 import { api, errorMessage } from "@/lib/api";
 import { categoryMeta } from "@/lib/categories";
-import { cn, formatDate, plural, timeLeft } from "@/lib/utils";
+import { cdnImg, cn, formatDate, plural, timeLeft } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/misc";
@@ -124,7 +124,7 @@ export default function ClubPage() {
       {/* ---------- Hero ---------- */}
       <section className="relative overflow-hidden border-b">
         <div className="absolute inset-0" style={{ background: `linear-gradient(135deg, ${color} 0%, ${color}cc 45%, hsl(221 70% 16%) 100%)` }} />
-        {club.cover && <img src={club.cover} alt="" className="absolute inset-0 h-full w-full object-cover opacity-30 mix-blend-luminosity" onError={(e) => (e.currentTarget.style.display = "none")} />}
+        {club.cover && <img src={cdnImg(club.cover, 1200)} alt="" className="absolute inset-0 h-full w-full object-cover opacity-30 mix-blend-luminosity" onError={(e) => (e.currentTarget.style.display = "none")} />}
         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
         <div className="container relative py-12 text-white md:py-20">
           <div className="flex flex-col gap-6 md:flex-row md:items-end">

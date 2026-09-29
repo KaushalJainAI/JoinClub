@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Search, Inbox } from "lucide-react";
-import { useFetch, useDebounced } from "@/hooks/useFetch";
+import { usePaged, useDebounced } from "@/hooks/useFetch";
 import { CATEGORIES } from "@/lib/categories";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/misc";
@@ -28,9 +28,8 @@ export default function Openings() {
     setParams(next, { replace: true });
   };
 
-  const query = new URLSearchParams({ ...(debouncedQ && { q: debouncedQ }), ...(category !== "all" && { category }), ...(mode && { mode }) });
-  const { data, loading } = useFetch(`/openings?${query}`);
-  const openings = data?.openings || [];
+  const filters = new URLSearchParams({ ...(debouncedQ && { q: debouncedQ }), ...(category !== "all" && { category }), ...(mode && { mode }) }).toString();
+  const { items: openings, total, loading, loadingMore, hasMore, loadMore } = usePaged(`/openings${filters ? `?${filters}` : ""}`, "openings", { pageSize: 24 });
   const closingSoon = openings.filter((o) => new Date(o.deadline) - Date.now() < 3 * 86400_000);
 
   return (
@@ -80,7 +79,7 @@ export default function Openings() {
       )}
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {loading && !data ? (
+        {loading && openings.length === 0 ? (
           Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-56" />)
         ) : openings.length === 0 ? (
           <div className="sm:col-span-2 lg:col-span-3">
@@ -92,6 +91,13 @@ export default function Openings() {
           openings.map((o) => <OpeningCard key={o._id} opening={o} />)
         )}
       </div>
+      {hasMore && (
+        <div className="mt-8 text-center">
+          <button onClick={loadMore} disabled={loadingMore} className="rounded-xl border bg-card px-5 py-2.5 text-sm font-semibold shadow-soft hover:border-primary disabled:opacity-60">
+            {loadingMore ? "Loading…" : `Show more (${total - openings.length} left)`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

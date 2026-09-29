@@ -3,12 +3,15 @@ import { Club } from "../model/club.model.js";
 import { Opening, withIsOpen } from "../model/opening.model.js";
 import { Application } from "../model/application.model.js";
 import { Event } from "../model/event.model.js";
-import { HttpError, escapeRegex } from "../utils/http.js";
+import { HttpError } from "../utils/http.js";
 import { TZ, istDateKey } from "../utils/time.js";
 import { uploadFile } from "../utils/cloudinary.js";
+import { memo } from "../utils/memo.js";
+import { searchIds } from "../utils/search.js";
 import { invalidateCatalog } from "../ai/context.js";
 
-const CARD_FIELDS = "name shortName slug category tagline summary logo cover color icon memberCount followers skills";
+// No `followers`: lists only need the count, and the array can be thousands of ids per club.
+const CARD_FIELDS = "name shortName slug category tagline summary logo cover color icon memberCount followerCount skills";
 
 export const assertOwnsClub = (req, clubId) => {
   if (req.role === "super_admin") return;
@@ -26,14 +29,18 @@ async function openCountsByClub(match = {}) {
   return Object.fromEntries(rows.map((r) => [String(r._id), r]));
 }
 
-const toCard = (club, counts, userId) => {
+// The ids of the clubs this student follows, in one indexed query, so a list never has to
+// load each club's follower array to answer "am I following this one?".
+const followedClubIds = async (userId) => (userId ? new Set((await Club.find({ followers: userId }).distinct("_id")).map(String)) : new Set());
+
+const toCard = (club, counts, followed) => {
   const c = club.toObject ? club.toObject() : club;
   const open = counts[String(c._id)];
   return {
     ...c,
     followers: undefined,
-    followerCount: c.followers?.length || 0,
-    isFollowing: userId ? c.followers?.some((f) => String(f) === String(userId)) : false,
+    followerCount: c.followerCount || 0,
+    isFollowing: followed.has(String(c._id)),
     openCount: open?.count || 0,
     nextDeadline: open?.nextDeadline || null,
   };
@@ -44,12 +51,10 @@ export const listClubs = async (req, res) => {
   const filter = {};
   if (category && category !== "all") filter.category = category;
   if (includeArchived !== "true") filter.archivedAt = null;
-  if (q) {
-    const rx = new RegExp(escapeRegex(q.trim()), "i");
-    filter.$or = [{ name: rx }, { shortName: rx }, { tagline: rx }, { summary: rx }, { skills: rx }, { activities: rx }];
-  }
-  const [clubs, counts] = await Promise.all([Club.find(filter).select(CARD_FIELDS).lean(), openCountsByClub()]);
-  let cards = clubs.map((c) => toCard(c, counts, req.id));
+  const matches = await searchIds(Club, filter, q, ["name", "shortName"]);
+  if (matches) filter._id = { $in: matches };
+  const [clubs, counts, followed] = await Promise.all([Club.find(filter).select(CARD_FIELDS).lean(), openCountsByClub(), followedClubIds(req.id)]);
+  let cards = clubs.map((c) => toCard(c, counts, followed));
   if (recruiting === "true") cards = cards.filter((c) => c.openCount > 0);
 
   const sorters = {
@@ -59,20 +64,29 @@ export const listClubs = async (req, res) => {
     recruiting: (a, b) => b.openCount - a.openCount || (a.nextDeadline || Infinity) - (b.nextDeadline || Infinity),
   };
   cards.sort(sorters[sort] || sorters.popular);
-  res.json({ success: true, clubs: cards });
+  // Optional ?limit= for callers that show a few (the home page). The whole set is small
+  // (a college's clubs), so it is sorted first and cut after.
+  const limit = Math.min(50, Math.max(0, Math.floor(Number(req.query.limit)) || 0));
+  res.json({ success: true, clubs: limit ? cards.slice(0, limit) : cards });
 };
 
 export const categoryCounts = async (req, res) => {
-  const rows = await Club.aggregate([{ $group: { _id: "$category", count: { $sum: 1 } } }, { $sort: { count: -1 } }]);
-  res.json({ success: true, categories: rows.map((r) => ({ category: r._id, count: r.count })) });
+  const categories = await memo("club:categories", 60_000, async () => {
+    const rows = await Club.aggregate([{ $group: { _id: "$category", count: { $sum: 1 } } }, { $sort: { count: -1 } }]);
+    return rows.map((r) => ({ category: r._id, count: r.count }));
+  });
+  res.set("Cache-Control", "public, max-age=60");
+  res.json({ success: true, categories });
 };
 
 export const getClub = async (req, res) => {
-  const club = await Club.findOne({ slug: req.params.slug.toLowerCase(), archivedAt: null }).populate("admins", "fullname").lean();
+  const club = await Club.findOne({ slug: req.params.slug.toLowerCase(), archivedAt: null }).select("-followers").populate("admins", "fullname").lean();
   if (!club) throw new HttpError(404, "Club not found.");
 
   const now = new Date();
-  const [openings, pastOpenings, events, applicationCount, acceptedCount, related] = await Promise.all([
+  // Everything that needs only the club goes in one batch; the queries that need the ids
+  // it returns (openings, related clubs) go in a second.
+  const [openings, pastOpenings, events, byStatus, related, followed] = await Promise.all([
     Opening.find({ club: club._id, status: "open", deadline: { $gt: now } }).sort({ deadline: 1 }).lean(),
     Opening.find({ club: club._id, $or: [{ status: "closed" }, { deadline: { $lte: now } }] })
       .sort({ deadline: -1 })
@@ -80,54 +94,53 @@ export const getClub = async (req, res) => {
       .select("title deadline mode")
       .lean(),
     Event.find({ club: club._id, date: { $gte: new Date(now.getTime() - 60 * 86400_000) } }).sort({ date: 1 }).limit(8).lean(),
-    Application.countDocuments({ club: club._id }),
-    Application.countDocuments({ club: club._id, status: "accepted" }),
-    Club.find({ category: club.category, _id: { $ne: club._id } }).select(CARD_FIELDS).limit(3).lean(),
+    Application.aggregate([{ $match: { club: club._id } }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
+    Club.find({ category: club.category, _id: { $ne: club._id }, archivedAt: null }).select(CARD_FIELDS).limit(3).lean(),
+    followedClubIds(req.id),
   ]);
 
-  let myApplications = [];
-  if (req.id && openings.length) {
-    myApplications = await Application.find({ applicant: req.id, opening: { $in: openings.map((o) => o._id) } })
-      .select("opening status")
-      .lean();
-  }
+  const openingIds = openings.map((o) => o._id);
+  const [myApplications, applicantCounts, counts] = await Promise.all([
+    req.id && openingIds.length ? Application.find({ applicant: req.id, opening: { $in: openingIds } }).select("opening status").lean() : [],
+    openingIds.length ? Application.aggregate([{ $match: { opening: { $in: openingIds } } }, { $group: { _id: "$opening", count: { $sum: 1 } } }]) : [],
+    openCountsByClub({ club: { $in: related.map((r) => r._id) } }),
+  ]);
   const applied = new Map(myApplications.map((a) => [String(a.opening), a.status]));
-  const applicantCounts = await Application.aggregate([
-    { $match: { opening: { $in: openings.map((o) => o._id) } } },
-    { $group: { _id: "$opening", count: { $sum: 1 } } },
-  ]);
   const countMap = Object.fromEntries(applicantCounts.map((r) => [String(r._id), r.count]));
+  const status = Object.fromEntries(byStatus.map((s) => [s._id, s.count]));
 
-  const counts = await openCountsByClub({ club: { $in: related.map((r) => r._id) } });
   res.json({
     success: true,
     club: {
-      ...toCard(club, {}, req.id),
+      ...toCard(club, {}, followed),
       openCount: openings.length,
-      stats: { applications: applicationCount, accepted: acceptedCount, events: events.length },
+      stats: { applications: byStatus.reduce((total, s) => total + s.count, 0), accepted: status.accepted || 0, events: events.length },
     },
     openings: openings.map((o) => ({ ...withIsOpen(o), applicantCount: countMap[String(o._id)] || 0, myStatus: applied.get(String(o._id)) || null })),
     pastOpenings,
     events,
-    related: related.map((r) => toCard(r, counts, req.id)),
+    related: related.map((r) => toCard(r, counts, followed)),
   });
 };
 
+// Each write is conditional on the current state and moves the array and the counter
+// together, so a double click or two devices can't push followerCount out of step.
 export const toggleFollow = async (req, res) => {
-  const club = await Club.findOne({ slug: req.params.slug.toLowerCase() }).select("followers");
+  const club = await Club.findOne({ slug: req.params.slug.toLowerCase() }).select("_id").lean();
   if (!club) throw new HttpError(404, "Club not found.");
-  const following = club.followers.some((f) => String(f) === String(req.id));
-  await Club.updateOne({ _id: club._id }, following ? { $pull: { followers: req.id } } : { $addToSet: { followers: req.id } });
-  res.json({ success: true, following: !following, message: following ? "Unfollowed." : "Following! We'll show you their updates." });
+  const followed = await Club.updateOne({ _id: club._id, followers: { $ne: req.id } }, { $addToSet: { followers: req.id }, $inc: { followerCount: 1 } });
+  const following = followed.modifiedCount === 1;
+  if (!following) await Club.updateOne({ _id: club._id, followers: req.id }, { $pull: { followers: req.id }, $inc: { followerCount: -1 } });
+  res.json({ success: true, following, message: following ? "Following! We'll show you their updates." : "Unfollowed." });
 };
 
 // ---------- club admin ----------
 
 export const getMyClub = async (req, res) => {
   if (!req.clubId) throw new HttpError(404, "Your account isn't linked to a club.");
-  const club = await Club.findById(req.clubId).lean();
+  const club = await Club.findById(req.clubId).select("-followers").lean();
   if (!club) throw new HttpError(404, "Club not found.");
-  res.json({ success: true, club: { ...club, followers: undefined, followerCount: club.followers.length } });
+  res.json({ success: true, club });
 };
 
 export const updateMyClub = async (req, res) => {
@@ -145,7 +158,8 @@ export const updateMyClub = async (req, res) => {
 
   await club.save();
   invalidateCatalog(); // the assistant should see the new copy right away
-  res.json({ success: true, message: "Club page updated.", club });
+  // `club` is the full document, and would send every follower id to the browser.
+  res.json({ success: true, message: "Club page updated.", club: { ...club.toObject(), followers: undefined } });
 };
 
 export const myDashboard = async (req, res) => {
@@ -155,7 +169,7 @@ export const myDashboard = async (req, res) => {
   const since = new Date(Date.now() - 15 * 86400_000);
 
   const [club, byStatus, openOpenings, totalOpenings, perDay, recent, upcomingEvents] = await Promise.all([
-    Club.findById(clubId).select("name shortName slug logo color followers memberCount").lean(),
+    Club.findById(clubId).select("name shortName slug logo color followerCount memberCount").lean(),
     Application.aggregate([{ $match: { club: clubId } }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
     Opening.countDocuments({ club: clubId, status: "open", deadline: { $gt: new Date() } }),
     Opening.countDocuments({ club: clubId }),
@@ -182,7 +196,7 @@ export const myDashboard = async (req, res) => {
   }
   res.json({
     success: true,
-    club: { ...club, followers: undefined, followerCount: club.followers.length },
+    club,
     stats: {
       openOpenings,
       totalOpenings,

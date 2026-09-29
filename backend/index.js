@@ -21,7 +21,10 @@ process.on("uncaughtException", (err) => {
   process.exit(1);
 });
 
+const { backfillFollowerCounts } = await import("./utils/migrations.js");
+
 connectDB()
+  .then(() => backfillFollowerCounts())
   .then(() => {
     app.listen(PORT, () => logger.info(`JoinClub API on http://localhost:${PORT}`));
   })

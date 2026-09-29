@@ -1,5 +1,6 @@
 // The one place that talks to Claude. Everything else in ai/ builds prompts and
 // calls streamText() or generateJSON().
+import { AsyncLocalStorage } from "node:async_hooks";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { recordUsage } from "./usage.js";
@@ -14,27 +15,14 @@ let client;
 const getClient = () => (client ??= new Anthropic());
 
 // Set by the caller for the request in flight, so every call made while handling it is
-// attributed to the same user and feature. A module-level value, because llm.js is the
-// only module that talks to the model and the alternative is threading it through every
-// prompt builder.
-let current = { user: null, feature: "unknown" };
-export const withUsageContext = (context, fn) => {
-  const previous = current;
-  current = { ...current, ...context };
-  let result;
-  try {
-    result = fn();
-  } catch (err) {
-    current = previous;
-    throw err;
-  }
-  // Streaming and JSON calls are async: keep the context until the promise settles, or a
-  // later request would be billed to this one's user and feature.
-  if (result && typeof result.then === "function") return result.finally(() => (current = previous));
-  current = previous;
-  return result;
-};
-const context = () => current;
+// attributed to the same user and feature, without threading it through every prompt
+// builder. AsyncLocalStorage keeps one value per request even when requests overlap, and
+// when a request runs two model calls at once (an answer streaming while a score is
+// computed); a plain module variable would bill one of them to the other's feature.
+const usageStore = new AsyncLocalStorage();
+const DEFAULT_CONTEXT = { user: null, feature: "unknown" };
+export const withUsageContext = (context, fn) => usageStore.run({ ...(usageStore.getStore() || DEFAULT_CONTEXT), ...context }, fn);
+const context = () => usageStore.getStore() || DEFAULT_CONTEXT;
 
 export class AiRefusal extends Error {
   constructor() {
@@ -42,6 +30,17 @@ export class AiRefusal extends Error {
     this.status = 422;
   }
 }
+
+/**
+ * Marks the last message of `history` as a prompt-cache breakpoint, so a long chat pays
+ * for its earlier turns once and reads them from cache afterwards. Pass only the saved
+ * history: the new user turn changes every time and goes after the breakpoint.
+ */
+export const cacheHistory = (history) => {
+  const last = history.at(-1);
+  if (!last || typeof last.content !== "string") return history;
+  return [...history.slice(0, -1), { ...last, content: [{ type: "text", text: last.content, cache_control: { type: "ephemeral" } }] }];
+};
 
 // Server-side refusal fallbacks exist for the Opus 5 / Fable tier. "default" lets
 // Anthropic pick the fallback model by refusal category.

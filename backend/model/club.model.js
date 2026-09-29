@@ -39,7 +39,10 @@ const clubSchema = new mongoose.Schema(
       email: String,
     },
     memberCount: { type: Number, default: 0 },
+    // followerCount mirrors followers.length so lists never have to load the array: it is
+    // changed only together with `followers`, in toggleFollow, and rebuilt by the seed.
     followers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    followerCount: { type: Number, default: 0, min: 0 },
     admins: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     // Set when a club is wound down for the year. It stays readable by slug for old links
     // and in the super-admin list, but drops out of the public listings.
@@ -54,4 +57,9 @@ clubSchema.index(
   { weights: { name: 10, shortName: 10, tagline: 4, skills: 3 }, name: "club_text" }
 );
 
-export const Club = mongoose.model("Club", clubSchema);
+// "Which clubs does this student follow?" (the isFollowing flag on every club list).
+// The club list itself is not indexed on purpose: a college has tens of clubs, and the
+// sort by popularity is done on the few that come back.
+clubSchema.index({ followers: 1 });
+
+export const Club =mongoose.model("Club", clubSchema);

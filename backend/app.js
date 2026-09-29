@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import helmet from "helmet";
+import compression from "compression";
 import pinoHttp from "pino-http";
 import { logger } from "./utils/logger.js";
 import authRoute from "./routes/auth.route.js";
@@ -39,6 +40,13 @@ app.use((req, _res, next) => {
 });
 
 app.use(helmet());
+// gzip/brotli for JSON and HTML. Never for server-sent events: the compressor buffers,
+// so the AI chat would arrive in one lump instead of word by word.
+app.use(
+  compression({
+    filter: (req, res) => !String(res.getHeader("Content-Type") || "").includes("text/event-stream") && compression.filter(req, res),
+  })
+);
 app.use(cors({ origin: (process.env.CLIENT_URL || "http://localhost:5173").split(","), credentials: true }));
 app.use(express.json({ limit: "200kb" }));
 app.use(cookieParser());

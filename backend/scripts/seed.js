@@ -15,7 +15,7 @@ import "dotenv/config";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import mongoose from "mongoose";
 import { fakerEN_IN as faker } from "@faker-js/faker";
 import connectDB from "../utils/db.js";
@@ -441,6 +441,8 @@ async function seedFollowers(clubs, students) {
     const followers = sample(students, rand(5, 40)).map((s) => s._id);
     await Club.updateOne({ _id: club._id }, { $addToSet: { followers: { $each: followers } } });
   }
+  // The counter mirrors the array; the array was just written directly.
+  await Club.updateMany({}, [{ $set: { followerCount: { $size: "$followers" } } }]);
   console.log("Followers: added");
 }
 

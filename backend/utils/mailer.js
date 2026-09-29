@@ -69,3 +69,41 @@ export function otpEmail(code, purpose, minutes) {
   </div>`;
   return { subject: `${code} is your JoinClub PEC code`, html, text };
 }
+
+const escapeHtml = (s = "") => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+const STATUS_COPY = {
+  shortlisted: {
+    subject: (club) => `You're shortlisted by ${club}!`,
+    lead: (club, opening) => `Good news: ${club} has shortlisted you for <strong>${opening}</strong>.`,
+    next: "Expect them to reach out about an interview. You can practise with the mock interview on JoinClub.",
+  },
+  accepted: {
+    subject: (club) => `Welcome to ${club} 🎉`,
+    lead: (club, opening) => `Congratulations! ${club} has accepted your application for <strong>${opening}</strong>.`,
+    next: "The club will be in touch with next steps.",
+  },
+  rejected: {
+    subject: (club) => `An update on your ${club} application`,
+    lead: (club, opening) => `Thank you for applying to ${club} for <strong>${opening}</strong>. They weren't able to offer you a spot this time.`,
+    next: "Plenty of other clubs are recruiting. Follow the ones you like to hear when they open.",
+  },
+};
+
+// The email a student gets when a club admin shortlists, accepts or rejects them.
+// Returns null for statuses that don't warrant an email.
+export function statusEmail({ name, club, opening, status, url }) {
+  const copy = STATUS_COPY[status];
+  if (!copy) return null;
+  const lead = copy.lead(escapeHtml(club), escapeHtml(opening));
+  const text = `Hi ${name},\n\n${lead.replace(/<[^>]+>/g, "")}\n\n${copy.next}\n\nTrack your applications: ${url}`;
+  const html = `
+  <div style="font-family:Inter,Arial,sans-serif;max-width:480px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:16px">
+    <h2 style="margin:0 0 8px;color:#0b2a5b">JoinClub <span style="color:#c2410c">PEC</span></h2>
+    <p style="color:#374151">Hi ${escapeHtml(name)},</p>
+    <p style="color:#374151">${lead}</p>
+    <p style="color:#374151">${escapeHtml(copy.next)}</p>
+    <p><a href="${escapeHtml(url)}" style="display:inline-block;background:#0b2a5b;color:#fff;padding:10px 16px;border-radius:10px;text-decoration:none">View my applications</a></p>
+  </div>`;
+  return { subject: copy.subject(club), html, text };
+}

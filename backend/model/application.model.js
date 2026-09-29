@@ -8,7 +8,7 @@ const applicationSchema = new mongoose.Schema(
     club: { type: mongoose.Schema.Types.ObjectId, ref: "Club", required: true, index: true },
     // Set to a fresh id (not null) when the applicant deletes their account, so the unique
     // index below still behaves and no user document is left to look up.
-    applicant: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    applicant: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     // True once the applicant erased their account: the record stays for the club, without
     // the name, email or answers.
     applicantDeleted: { type: Boolean, default: false },
@@ -26,5 +26,7 @@ const applicationSchema = new mongoose.Schema(
 // One application per student per opening; also closes the double-submit race.
 applicationSchema.index({ opening: 1, applicant: 1 }, { unique: true });
 applicationSchema.index({ club: 1, status: 1, createdAt: -1 });
+// A student's own list (My Applications, the assistant's context), newest first.
+applicationSchema.index({ applicant: 1, createdAt: -1 });
 
 export const Application = mongoose.model("Application", applicationSchema);

@@ -1,6 +1,6 @@
 import * as React from "react";
 import * as AvatarPrimitive from "@radix-ui/react-avatar";
-import { cn, initials } from "@/lib/utils";
+import { cdnImg, cn, initials } from "@/lib/utils";
 
 const Avatar = React.forwardRef(({ className, ...props }, ref) => (
   <AvatarPrimitive.Root ref={ref} className={cn("relative flex h-10 w-10 shrink-0 overflow-hidden rounded-full", className)} {...props} />
@@ -21,7 +21,7 @@ AvatarFallback.displayName = AvatarPrimitive.Fallback.displayName;
 function UserAvatar({ user, className }) {
   return (
     <Avatar className={className}>
-      {user?.profile?.profilePhoto && <AvatarImage src={user.profile.profilePhoto} alt="" />}
+      {user?.profile?.profilePhoto && <AvatarImage src={cdnImg(user.profile.profilePhoto, 64)} alt="" />}
       <AvatarFallback>{initials(user?.fullname)}</AvatarFallback>
     </Avatar>
   );

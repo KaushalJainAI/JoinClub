@@ -15,17 +15,17 @@ Base `/api/v1`. JSON responses are `{ success, message?, ...data }`; errors are
 | `GET /clubs/:slug` | 🔓 | Full club page, open/past openings, events, related clubs |
 | `POST /clubs/:slug/follow` | 👤 | Toggle follow |
 | `GET /clubs/mine` · `GET /clubs/mine/dashboard` · `PUT /clubs/mine` (multipart `logo`, `cover`) | 🛠 | Own club |
-| `GET /openings?q&category&club&mode` · `GET /openings/:id` | 🔓 | Open positions (with `myStatus` when logged in) |
+| `GET /openings?q&category&club&mode&page&limit` · `GET /openings/:id` | 🔓 | Open positions (with `myStatus` when logged in); returns `total`, `page`, `pages` (default 24 per page, max 100) |
 | `GET /openings/mine` · `POST /openings` · `PUT /openings/:id` · `DELETE /openings/:id` | 🛠 | Manage openings |
-| `GET /openings/:id/applicants?status&q` · `GET /openings/:id/applicants.csv` | 🛠 | Review / export |
+| `GET /openings/:id/applicants?status&q&page&limit` · `GET /openings/:id/applicants.csv` | 🛠 | Review / export |
 | `POST /applications/opening/:id {answers[]}` | 🎓 | Apply (re-apply after withdrawing) |
 | `GET /applications/mine` · `POST /applications/:id/withdraw` | 🎓 | Track, withdraw |
-| `PATCH /applications/:id/status {status?, adminNote?}` | 🛠 | Decide |
+| `PATCH /applications/:id/status {status?, adminNote?}` | 🛠 | Decide. Emails the student on shortlisted / accepted / rejected |
 | `GET /events?club&category` · `POST /events` · `DELETE /events/:id` | 🔓/🛠 | Events |
 | `GET /stats` | 🔓 | Home-page counts |
 | `GET /admin/clubs` · `POST /admin/admins/:userId/reset-password` | 👑 | Admins |
 | `GET /ai/status` | 🔓 | `{ enabled, model }` |
-| `POST /ai/chat {mode, sessionId?, message, setup?, history?}` | 🔓 (interview 👤) | **SSE** stream |
+| `POST /ai/chat {mode, sessionId?, message, setup?, history?, regenerate?}` | 🔓 (interview 👤) | **SSE** stream. `regenerate: true` re-answers the last question and replaces the old answer. Returns 429 `AI_DAILY_BUDGET` past the student's daily token budget |
 | `GET/DELETE /ai/sessions[/:id]` | 👤 | Chat history |
 | `POST /ai/check-answer {question, answer, clubSlug?, openingId?, tone?}` | 🔓 | Answer feedback |
 | `POST /ai/applicant-summary/:applicationId` | 🛠 | AI summary for reviewers |

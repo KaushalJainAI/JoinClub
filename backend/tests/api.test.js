@@ -4,7 +4,7 @@
 //   TEST_MONGO_URI=mongodb://127.0.0.1:27017/ npm test   (to use an existing server)
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import mongoose from "mongoose";
 import request from "supertest";
 
@@ -469,5 +469,369 @@ describe("club admin lifecycle (2.2)", () => {
     const listed = await request(app).get("/api/v1/clubs");
     assert.ok(!listed.body.clubs.some((c) => c.slug === "robotics-society"));
     assert.equal((await request(app).get("/api/v1/clubs/robotics-society")).status, 404);
+  });
+});
+
+describe("status emails, pagination, AI budget and regenerate", () => {
+  test("status-change email names the club and escapes HTML", async () => {
+    const { statusEmail } = await import("../utils/mailer.js");
+    const mail = statusEmail({ name: "Asha", club: "<b>Club</b>", opening: "Core Team", status: "accepted", url: "http://x/applications" });
+    assert.match(mail.subject, /Welcome to <b>Club<\/b>/); // subjects are plain text
+    assert.match(mail.html, /&lt;b&gt;Club&lt;\/b&gt;/);
+    assert.equal(statusEmail({ name: "A", club: "C", opening: "O", status: "pending", url: "u" }), null);
+  });
+
+  test("applicants are paginated and carry per-status counts", async () => {
+    const a = await login("a.admin@test.dev");
+    const res = await a.get(`/api/v1/openings/${openingA._id}/applicants?limit=1`);
+    assert.equal(res.status, 200);
+    assert.ok(res.body.applications.length <= 1);
+    assert.equal(res.body.page, 1);
+    assert.ok(res.body.total >= res.body.applications.length);
+    assert.equal(typeof res.body.counts.all, "number");
+  });
+
+  test("the public openings list is paginated", async () => {
+    const res = await request(app).get("/api/v1/openings?limit=1&page=1");
+    assert.equal(res.body.openings.length, 1);
+    assert.ok(res.body.total >= 2);
+    assert.equal(res.body.pages, res.body.total);
+  });
+
+  test("a student over today's AI token budget gets 429", async () => {
+    const { AiUsage } = await import("../model/aiUsage.model.js");
+    const u = await makeUser({ email: "heavy@test.dev", role: "student" });
+    await AiUsage.create({ user: u._id, feature: "helpdesk", model: "claude-opus-5", inputTokens: 150_000, outputTokens: 60_000 });
+    const s = await login("heavy@test.dev");
+    const res = await s.post("/api/v1/ai/chat").send({ mode: "helpdesk", message: "hi" });
+    assert.equal(res.status, 429);
+    assert.equal(res.body.code, "AI_DAILY_BUDGET");
+  });
+
+  test("regenerate replaces the last answer instead of adding a new question", async () => {
+    await makeUser({ email: "regen@test.dev", role: "student" });
+    const s = await login("regen@test.dev");
+    const first = await s.post("/api/v1/ai/chat").send({ mode: "helpdesk", message: "How does club recruitment work?" });
+    const sessionId = JSON.parse(first.text.split("\n").find((l) => l.includes('"type":"session"')).slice(6)).sessionId;
+    const again = await s.post("/api/v1/ai/chat").send({ mode: "helpdesk", sessionId, message: "ignored", regenerate: true });
+    assert.match(again.text, /"type":"done"/);
+    const msgs = await ChatMessage.find({ session: sessionId }).sort({ createdAt: 1 }).lean();
+    assert.deepEqual(msgs.map((m) => m.role), ["user", "assistant"]);
+    assert.equal(msgs[0].content, "How does club recruitment work?");
+  });
+});
+
+// ---------- performance work: follows, search, pagination, caching, AI stream order ----------
+
+describe("performance: follows", () => {
+  test("follow toggles atomically and followerCount never drifts from the array", async () => {
+    const s1 = await login("student@test.dev");
+    const s2 = await login("student2@test.dev");
+    const first = await s1.post("/api/v1/clubs/club-a/follow");
+    assert.equal(first.body.following, true);
+    assert.equal((await Club.findOne({ slug: "club-a" }).lean()).followerCount, 1);
+
+    // Double clicks and two devices at once: whatever order they land in, the counter and
+    // the array must agree.
+    await Promise.all([1, 2, 3, 4].map((i) => (i % 2 ? s1 : s2).post("/api/v1/clubs/club-a/follow")));
+    const club = await Club.findOne({ slug: "club-a" }).lean();
+    assert.equal(club.followerCount, club.followers.length);
+    assert.ok(club.followerCount >= 0);
+  });
+
+  test("lists and the club page carry followerCount and isFollowing, never the array", async () => {
+    const s = await login("student2@test.dev");
+    const me = await User.findOne({ email: "student2@test.dev" }).lean();
+    if (!(await Club.exists({ slug: "club-a", followers: me._id }))) await s.post("/api/v1/clubs/club-a/follow");
+
+    const list = await s.get("/api/v1/clubs");
+    const a = list.body.clubs.find((c) => c.slug === "club-a");
+    assert.equal(a.isFollowing, true);
+    assert.equal(typeof a.followerCount, "number");
+    for (const c of list.body.clubs) assert.equal("followers" in c, false, `${c.slug} leaks followers`);
+
+    const page = await s.get("/api/v1/clubs/club-a");
+    assert.equal(page.body.club.isFollowing, true);
+    assert.equal("followers" in page.body.club, false);
+    assert.equal(typeof page.body.club.stats.applications, "number");
+    assert.ok(Array.isArray(page.body.related));
+
+    const guest = await request(app).get("/api/v1/clubs/club-a");
+    assert.equal(guest.body.club.isFollowing, false);
+  });
+
+  test("deleting an account takes its follow off the count", async () => {
+    await makeUser({ email: "leaver@test.dev", role: "student" });
+    const s = await login("leaver@test.dev");
+    await s.post("/api/v1/clubs/club-b/follow");
+    const before = (await Club.findOne({ slug: "club-b" }).lean()).followerCount;
+    assert.ok(before >= 1);
+    assert.equal((await s.delete("/api/v1/users/me")).status, 200);
+    const club = await Club.findOne({ slug: "club-b" }).lean();
+    assert.equal(club.followerCount, before - 1);
+    assert.equal(club.followerCount, club.followers.length);
+  });
+
+  test("the startup backfill fills in clubs saved before the counter existed", async () => {
+    const { backfillFollowerCounts } = await import("../utils/migrations.js");
+    // Bypass the schema default, as an old document would have no such field.
+    await Club.collection.insertOne({ name: "Old Club", slug: "old-club", category: "social", followers: [new mongoose.Types.ObjectId(), new mongoose.Types.ObjectId()] });
+    await backfillFollowerCounts();
+    assert.equal((await Club.findOne({ slug: "old-club" }).lean()).followerCount, 2);
+  });
+});
+
+describe("performance: search uses the text index and still finds word starts", () => {
+  before(async () => {
+    const admin = await User.findOne({ email: "a.admin@test.dev" }).lean();
+    await Club.create({ name: "Robotics Lab", shortName: "RS", slug: "robotics-lab", category: "technical", tagline: "We build robots", skills: ["arduino"] });
+    await Opening.create({
+      club: clubA._id,
+      title: "Robotics Recruitment",
+      description: "Join the build team this semester",
+      deadline: new Date(Date.now() + 5 * 86400_000),
+      createdBy: admin._id,
+    });
+  });
+  const names = (res) => res.body.clubs.map((c) => c.slug);
+
+  test("clubs: whole word, stemmed word, word start and a skill all match", async () => {
+    for (const q of ["robotics", "robot", "robo", "arduino"]) {
+      assert.ok(names(await request(app).get(`/api/v1/clubs?q=${q}`)).includes("robotics-lab"), `q=${q}`);
+    }
+    assert.deepEqual(names(await request(app).get("/api/v1/clubs?q=zzzzqq")), []);
+  });
+
+  test("clubs: the search box can't be used to inject operators or regex", async () => {
+    for (const q of ['"robotics', "-robotics", "(", "[", ".*"]) {
+      const res = await request(app).get(`/api/v1/clubs?q=${encodeURIComponent(q)}`);
+      assert.equal(res.status, 200, `q=${q}`);
+    }
+  });
+
+  test("openings: text match and title word start, with other filters still applied", async () => {
+    for (const q of ["robotics", "robo", "build"]) {
+      const res = await request(app).get(`/api/v1/openings?q=${q}`);
+      assert.ok(res.body.openings.some((o) => o.title === "Robotics Recruitment"), `q=${q}`);
+    }
+    const wrongCategory = await request(app).get("/api/v1/openings?q=robotics&category=cultural");
+    assert.equal(wrongCategory.body.openings.length, 0);
+  });
+
+  test("the assistant finds a club by name, by word start and by skill", async () => {
+    const { relevantClubs } = await import("../ai/context.js");
+    for (const q of ["tell me about robotics", "anything with arduino?", "robo lab"]) {
+      assert.equal((await relevantClubs(q))[0]?.slug, "robotics-lab", q);
+    }
+    assert.deepEqual(await relevantClubs("the and for"), [], "only stop words: nothing to search");
+  });
+});
+
+describe("performance: pagination and limits", () => {
+  test("?limit= on clubs, openings and events", async () => {
+    assert.equal((await request(app).get("/api/v1/clubs?limit=1")).body.clubs.length, 1);
+    assert.equal((await request(app).get("/api/v1/openings?limit=1")).body.openings.length, 1);
+    assert.ok((await request(app).get("/api/v1/events?limit=1")).body.events.length <= 1);
+  });
+
+  test("My Applications pages, filters by status and counts the whole list", async () => {
+    const student = await makeUser({ email: "pager@test.dev", role: "student" });
+    const admin = await User.findOne({ email: "a.admin@test.dev" }).lean();
+    const future = new Date(Date.now() + 9 * 86400_000);
+    const openings = await Opening.insertMany(
+      Array.from({ length: 5 }, (_, i) => ({ club: clubA._id, title: `Pager opening ${i}`, description: "Long enough description", deadline: future, createdBy: admin._id }))
+    );
+    await Application.insertMany(
+      openings.map((o, i) => ({ opening: o._id, club: clubA._id, applicant: student._id, answers: [], status: i < 2 ? "accepted" : "pending", createdAt: new Date(Date.now() - i * 1000) }))
+    );
+
+    const s = await login("pager@test.dev");
+    const p1 = await s.get("/api/v1/applications/mine?limit=2&page=1");
+    const p2 = await s.get("/api/v1/applications/mine?limit=2&page=2");
+    const p3 = await s.get("/api/v1/applications/mine?limit=2&page=3");
+    assert.equal(p1.body.applications.length, 2);
+    assert.equal(p3.body.applications.length, 1);
+    assert.equal(p1.body.total, 5);
+    assert.equal(p1.body.pages, 3);
+    assert.equal(p1.body.counts.all, 5);
+    assert.equal(p1.body.counts.accepted, 2);
+    const ids = new Set([...p1.body.applications, ...p2.body.applications, ...p3.body.applications].map((a) => a._id));
+    assert.equal(ids.size, 5, "no application on two pages, none missing");
+
+    const accepted = await s.get("/api/v1/applications/mine?status=accepted&limit=10");
+    assert.equal(accepted.body.total, 2);
+    assert.equal(accepted.body.counts.all, 5, "tiles still count everything");
+  });
+
+  test("applicant search runs in the database and pages the matches", async () => {
+    const admin = await User.findOne({ email: "a.admin@test.dev" }).lean();
+    const op = await Opening.create({ club: clubA._id, title: "Search target", description: "Long enough description", deadline: new Date(Date.now() + 9 * 86400_000), createdBy: admin._id });
+    const people = await Promise.all(
+      ["Zed Quill", "Zoe Quill", "Amy Brown", "Bob Green"].map((fullname, i) =>
+        makeUser({ email: `find${i}@test.dev`, fullname, role: "student", profile: { branch: i < 3 ? "Computer Science" : "Civil", skills: ["python"] } })
+      )
+    );
+    await Application.insertMany(people.map((u) => ({ opening: op._id, club: clubA._id, applicant: u._id, answers: [] })));
+
+    const a = await login("a.admin@test.dev");
+    const byName = await a.get(`/api/v1/openings/${op._id}/applicants?q=quill`);
+    assert.deepEqual(byName.body.applications.map((x) => x.applicant.fullname).sort(), ["Zed Quill", "Zoe Quill"]);
+    assert.equal(byName.body.total, 2);
+    assert.equal(byName.body.counts.all, 4, "status tabs still count every applicant");
+
+    const paged = await a.get(`/api/v1/openings/${op._id}/applicants?q=quill&limit=1&page=2`);
+    assert.equal(paged.body.applications.length, 1);
+    assert.equal(paged.body.pages, 2);
+
+    assert.equal((await a.get(`/api/v1/openings/${op._id}/applicants?q=civil`)).body.total, 1, "branch");
+    assert.equal((await a.get(`/api/v1/openings/${op._id}/applicants?q=python`)).body.total, 4, "skill");
+    assert.equal((await a.get(`/api/v1/openings/${op._id}/applicants?q=nobody-here`)).body.total, 0);
+
+    const csv = await a.get(`/api/v1/openings/${op._id}/applicants.csv?q=quill`);
+    assert.equal(csv.text.trim().split("\n").length, 3, "the export honours the search: header + 2 rows");
+  });
+});
+
+describe("performance: caching", () => {
+  test("memo shares one in-flight call, expires, and never keeps a failure", async () => {
+    const { memo, invalidateMemo } = await import("../utils/memo.js");
+    process.env.MEMO_IN_TESTS = "1";
+    try {
+      invalidateMemo();
+      let calls = 0;
+      const slow = async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        return ++calls;
+      };
+      const [x, y] = await Promise.all([memo("t:a", 1000, slow), memo("t:a", 1000, slow)]);
+      assert.deepEqual([x, y, calls], [1, 1, 1], "concurrent callers share one call");
+      assert.equal(await memo("t:a", 1000, slow), 1, "cached");
+      assert.equal(await memo("t:a", 0, slow), 2, "ttl 0 recomputes");
+
+      await assert.rejects(
+        memo("t:fail", 1000, async () => {
+          throw new Error("boom");
+        })
+      );
+      assert.equal(await memo("t:fail", 1000, async () => "recovered"), "recovered", "a failure is not cached");
+
+      await memo("openings:x", 1000, async () => 1);
+      invalidateMemo("openings:");
+      assert.equal(await memo("openings:x", 1000, async () => 2), 2, "prefix invalidation");
+    } finally {
+      delete process.env.MEMO_IN_TESTS;
+      invalidateMemo();
+    }
+  });
+
+  test("/stats is cached for a minute and sent with Cache-Control; creating an opening refreshes the assistant's digest", async () => {
+    const { invalidateMemo } = await import("../utils/memo.js");
+    const { openingsDigest } = await import("../ai/context.js");
+    process.env.MEMO_IN_TESTS = "1";
+    try {
+      invalidateMemo();
+      const one = await request(app).get("/api/v1/stats");
+      assert.match(one.headers["cache-control"], /max-age=60/);
+      await makeUser({ email: "stats-extra@test.dev", role: "student" });
+      const two = await request(app).get("/api/v1/stats");
+      assert.equal(two.body.stats.students, one.body.stats.students, "served from the cache");
+      invalidateMemo();
+      assert.equal((await request(app).get("/api/v1/stats")).body.stats.students, one.body.stats.students + 1);
+
+      const before = await openingsDigest();
+      assert.doesNotMatch(before, /Digest Refresh Drive/);
+      const a = await login("a.admin@test.dev");
+      const created = await a.post("/api/v1/openings").send({
+        title: "Digest Refresh Drive",
+        description: "Long enough description",
+        deadline: new Date(Date.now() + 3 * 86400_000).toISOString().slice(0, 10),
+      });
+      assert.equal(created.status, 201, created.body.message);
+      assert.match(await openingsDigest(), /Digest Refresh Drive/, "the write dropped the cached digest");
+    } finally {
+      delete process.env.MEMO_IN_TESTS;
+      invalidateMemo();
+    }
+  });
+
+  test("category counts are also sent cacheable", async () => {
+    const res = await request(app).get("/api/v1/clubs/categories");
+    assert.match(res.headers["cache-control"], /max-age=60/);
+    assert.ok(res.body.categories.length >= 1);
+  });
+});
+
+describe("performance: compression", () => {
+  test("JSON is compressed once it is big enough to matter, and the chat stream never is", async () => {
+    const long = "x".repeat(200);
+    await Club.insertMany(Array.from({ length: 12 }, (_, i) => ({ name: `Bulk Club ${i}`, slug: `bulk-club-${i}`, category: "social", tagline: long, summary: long })));
+    const list = await request(app).get("/api/v1/clubs").set("Accept-Encoding", "gzip");
+    assert.equal(list.headers["content-encoding"], "gzip");
+    assert.ok(list.body.clubs.length >= 12, "and it still decodes");
+
+    const chat = await request(app).post("/api/v1/ai/chat").set(H).set("Accept-Encoding", "gzip").send({ mode: "helpdesk", message: "How does club recruitment work?" });
+    assert.equal(chat.headers["content-encoding"], undefined, "an event stream must not be buffered by a compressor");
+    assert.match(chat.text, /"type":"done"/);
+  });
+});
+
+describe("performance: AI stream order and interview scoring", () => {
+  const events = (text) =>
+    text
+      .split("\n")
+      .filter((l) => l.startsWith("data: "))
+      .map((l) => JSON.parse(l.slice(6)));
+
+  test("done is sent before the follow-up chips, and the chips are saved on the reply", async () => {
+    await makeUser({ email: "chips@test.dev", role: "student" });
+    const s = await login("chips@test.dev");
+    const res = await s.post("/api/v1/ai/chat").send({ mode: "helpdesk", message: "How much time do clubs take?" });
+    const types = events(res.text).map((e) => e.type);
+    assert.ok(types.includes("suggestions"), "this reply has no option buttons, so it gets chips");
+    assert.ok(types.indexOf("done") < types.indexOf("suggestions"), `done first: ${types.join(",")}`);
+    assert.equal(types.at(-1), "suggestions", "and they close the stream");
+
+    const sessionId = events(res.text).find((e) => e.type === "session").sessionId;
+    const saved = await ChatMessage.findOne({ session: sessionId, role: "assistant" }).lean();
+    assert.ok(saved.suggestions.length > 0, "the chips are stored, so a reloaded chat shows them");
+  });
+
+  test("a reply with option buttons gets no chips", async () => {
+    const res = await request(app).post("/api/v1/ai/chat").set(H).send({ mode: "helpdesk", message: "Find a club for me" });
+    const types = events(res.text).map((e) => e.type);
+    assert.ok(types.includes("options"));
+    assert.ok(!types.includes("suggestions"));
+  });
+
+  test("interview answers are scored while the next question streams, and the report has every score", async () => {
+    await makeUser({ email: "interviewee@test.dev", role: "student" });
+    const s = await login("interviewee@test.dev");
+    const post = (body) => s.post("/api/v1/ai/chat").send({ mode: "interview", ...body });
+
+    const start = await post({ setup: { clubSlug: clubA.slug, total: 3, type: "hr" } });
+    const sessionId = events(start.text).find((e) => e.type === "session").sessionId;
+    let last;
+    for (const n of [1, 2, 3]) {
+      last = await post({ sessionId, message: `Answer number ${n} with a reasonable amount of detail about my motivation.` });
+      assert.match(last.text, /"type":"done"/, `answer ${n}`);
+    }
+    const { ChatSession } = await import("../model/chat.model.js");
+    const session = await ChatSession.findById(sessionId).lean();
+    assert.equal(session.meta.scores.length, 3, "one score per answer");
+    assert.deepEqual(session.meta.scores.map((x) => x.question), [1, 2, 3], "each score belongs to the question it answered");
+    assert.equal(session.meta.done, true);
+    assert.ok(events(last.text).some((e) => e.type === "report"), "the final answer returns the report card");
+  });
+});
+
+describe("performance: uploads", () => {
+  test("images are shrunk on the way in, PDFs are stored raw", async () => {
+    const { uploadOptions, MAX_IMAGE_SIDE } = await import("../utils/cloudinary.js");
+    const pdf = { buffer: Buffer.from("%PDF-1.4\n%test") };
+    const png = { buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]) };
+    assert.deepEqual(uploadOptions(pdf, "f"), { folder: "f", resource_type: "raw" });
+    const img = uploadOptions(png, "f");
+    assert.equal(img.resource_type, "image");
+    assert.deepEqual(img.transformation, [{ width: MAX_IMAGE_SIDE, height: MAX_IMAGE_SIDE, crop: "limit" }]);
   });
 });

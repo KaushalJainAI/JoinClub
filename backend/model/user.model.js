@@ -52,6 +52,9 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// siteStats counts students on every home page visit.
+userSchema.index({ role: 1 });
+
 // Never send the password hash to the client, whichever controller serialises the user.
 userSchema.set("toJSON", {
   transform: (_doc, ret) => {

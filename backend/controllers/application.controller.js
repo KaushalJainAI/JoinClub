@@ -1,4 +1,6 @@
 import { z } from "zod";
+import mongoose from "mongoose";
+import { sendMail, statusEmail } from "../utils/mailer.js";
 import { Application, APPLICATION_STATUSES } from "../model/application.model.js";
 import { Opening } from "../model/opening.model.js";
 import { HttpError } from "../utils/http.js";
@@ -55,12 +57,33 @@ export const apply = async (req, res) => {
 // The student sees what happened and when, but not who did it: naming the club admin
 // would turn a rejected application into a way to identify individuals.
 export const myApplications = async (req, res) => {
-  const applications = await Application.find({ applicant: req.id })
-    .sort({ createdAt: -1 })
-    .populate("opening", "title deadline mode status")
-    .populate("club", "name shortName slug logo color category")
-    .lean();
-  res.json({ success: true, applications: applications.map((a) => ({ ...a, history: (a.history || []).map(({ status, at }) => ({ status, at })) })) });
+  // Same ?page=&limit= contract as the openings list.
+  const limit = Math.min(50, Math.max(1, Math.floor(Number(req.query.limit)) || 20));
+  const page = Math.max(1, Math.floor(Number(req.query.page)) || 1);
+  const filter = { applicant: req.id };
+  if (APPLICATION_STATUSES.includes(req.query.status)) filter.status = req.query.status;
+  const [applications, total, byStatus] = await Promise.all([
+    Application.find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate("opening", "title deadline mode status")
+      .populate("club", "name shortName slug logo color category")
+      .lean(),
+    Application.countDocuments(filter),
+    // Per-status totals for the summary tiles, whatever the status filter.
+    Application.aggregate([{ $match: { applicant: new mongoose.Types.ObjectId(String(req.id)) } }, { $group: { _id: "$status", n: { $sum: 1 } } }]),
+  ]);
+  const counts = Object.fromEntries(byStatus.map((r) => [r._id, r.n]));
+  counts.all = byStatus.reduce((sum, r) => sum + r.n, 0);
+  res.json({
+    success: true,
+    applications: applications.map((a) => ({ ...a, history: (a.history || []).map(({ status, at }) => ({ status, at })) })),
+    counts,
+    total,
+    page,
+    pages: Math.max(1, Math.ceil(total / limit)),
+  });
 };
 
 export const withdraw = async (req, res) => {
@@ -73,17 +96,39 @@ export const withdraw = async (req, res) => {
   res.json({ success: true, message: "Application withdrawn.", application });
 };
 
+// Tells the student by email when a club shortlists, accepts or rejects them.
+async function notifyStatusChange(applicationId) {
+  const app = await Application.findById(applicationId)
+    .populate("applicant", "fullname email")
+    .populate("opening", "title")
+    .populate("club", "name")
+    .lean();
+  if (!app?.applicant?.email) return;
+  const clientUrl = (process.env.CLIENT_URL || "http://localhost:5173").split(",")[0];
+  const mail = statusEmail({
+    name: app.applicant.fullname.split(" ")[0],
+    club: app.club?.name,
+    opening: app.opening?.title,
+    status: app.status,
+    url: `${clientUrl}/applications`,
+  });
+  if (mail) await sendMail({ to: app.applicant.email, ...mail });
+}
+
 export const updateStatus = async (req, res) => {
   const application = await Application.findById(req.params.id).select("+adminNote");
   if (!application) throw new HttpError(404, "Application not found.");
   assertOwnsClub(req, application.club);
   if (application.status === "withdrawn") throw new HttpError(400, "The student withdrew this application.");
   const { status, adminNote } = req.body;
+  const changed = status && status !== application.status;
   if (status) {
     application.status = status;
     recordHistory(application, status, req.id);
   }
   if (adminNote !== undefined) application.adminNote = adminNote;
   await application.save();
+  // In the background, so a slow mail server never delays the admin's click.
+  if (changed) notifyStatusChange(application._id).catch((err) => console.error("[mail] status email failed:", err.message));
   res.json({ success: true, message: `Marked as ${application.status}.`, application });
 };

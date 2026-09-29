@@ -90,19 +90,19 @@ function SessionList({ mode, activeId, onOpen, onNew, refreshKey }) {
       <div className="-mx-1 flex-1 space-y-1 overflow-y-auto px-1">
         {data?.sessions?.length ? (
           data.sessions.map((s) => (
-            <button
-              key={s._id}
-              onClick={() => onOpen(s._id)}
-              className={cn("group flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors", s._id === activeId ? "bg-secondary font-medium" : "hover:bg-secondary/60")}
-            >
-              <div className="min-w-0 flex-1">
+            <div key={s._id} className={cn("group flex items-center gap-1 rounded-lg pr-1 transition-colors", s._id === activeId ? "bg-secondary font-medium" : "hover:bg-secondary/60")}>
+              <button onClick={() => onOpen(s._id)} className="min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm">
                 <div className="truncate">{s.title}</div>
                 <div className="text-xs text-muted-foreground">{relativeTime(s.updatedAt)}</div>
-              </div>
-              <span onClick={(e) => remove(s._id, e)} className="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100" role="button" aria-label="Delete chat">
+              </button>
+              <button
+                onClick={(e) => remove(s._id, e)}
+                className="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+                aria-label={`Delete chat "${s.title}"`}
+              >
                 <Trash2 className="h-3.5 w-3.5" />
-              </span>
-            </button>
+              </button>
+            </div>
           ))
         ) : (
           <p className="px-1 text-xs text-muted-foreground">Your conversations will appear here.</p>
@@ -153,7 +153,7 @@ function BuddyTab({ demo }) {
         )}
       </aside>
       <div className="overflow-hidden rounded-2xl border bg-muted/30">
-        <ChatWindow chat={chat} empty={<BuddyEmpty demo={demo} onPick={(t) => chat.send(t)} />} />
+        <ChatWindow regenerate chat={chat} empty={<BuddyEmpty demo={demo} onPick={(t) => chat.send(t)} />} />
       </div>
     </div>
   );
@@ -399,8 +399,9 @@ function InterviewTab() {
             </div>
           )}
           <ChatWindow
+            voice
             chat={chat}
-            placeholder="Type your answer… (Shift+Enter for a new line)"
+            placeholder="Type or speak your answer… (Shift+Enter for a new line)"
             inputDisabled={meta?.done}
             disabledHint="Interview complete. Your report card is above."
             renderExtra={(m) => (m.report ? <ReportCard report={m.report} onRetry={retry} onNew={chat.reset} /> : null)}

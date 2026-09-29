@@ -17,6 +17,7 @@ Backend (`cd backend`, copy `.env.example` to `.env`; only `SECRET_KEY`, `MONGO_
 - `npm run seed`: idempotent seed (clubs, one admin per club, fake students, openings, applications, events). Options: `-- --reset` wipes collections first, `-- --reset-admin-passwords`. It writes plain-text logins to `output/club-admin-credentials.csv`, which is git-ignored. Never commit it.
 - `npm run scrape`: scrapes pec.ac.in into `data/pec-clubs.json` (`-- --fresh` re-downloads; HTML is cached in `scripts/.cache/`). The seed reads only the JSON, never the live site.
 - `node scripts/check-llm-wiring.js`: offline check of `ai/llm.js` against a fake Anthropic server.
+- `npm run check:indexes`: runs `explain()` on the hot controller queries against an in-memory database and fails on any `COLLSCAN`. When you add a per-page-view query, add it to the list in `scripts/check-indexes.js`.
 
 Frontend (`cd frontend`):
 - `npm run dev` (:5173), `npm run build`, `npm run lint` (ESLint). There are no frontend tests.
@@ -43,6 +44,14 @@ Frontend (`cd frontend`):
 - `POST /ai/chat` streams SSE (`ai/sse.js`). Each `data:` line is JSON with a `type` field: `session`, `status`, `content_chunk`, `options`, `suggestions`, `report`, `done`, `error`. The model offers tappable choices by ending its reply with `[[options: A | B | C]]`. The server strips that into an `options` event, and the frontend `useChatStream` hides it while streaming. The interview's progress (question count, scores) is tracked server-side in `ChatSession.meta`, not by the model.
 - Privacy rule: AI context may include public club data and the **current user's own** data only.
 
+### Queries, search and caching
+- **Follows:** `Club.followers` (ids) and `Club.followerCount` move together. Change them only through the conditional updates in `toggleFollow` (and the `$inc` in account deletion), never with a bare `$pull`/`$addToSet`. List endpoints never select `followers`; they get `isFollowing` from one `Club.find({ followers: userId })` (`followedClubIds`). `utils/migrations.js` backfills the counter at startup for clubs saved before it existed.
+- **Search:** `utils/search.js` `searchIds()` merges `$text` matches with a word-prefix regex, because `$text` matches whole stemmed words and "robo" would not find "Robotics". Use it for any new search box. `$text` and `$or` can't share a query when the `$or` fields are unindexed, which is why it runs two queries and merges ids.
+- **Lists:** paginated endpoints share one contract: `?page=&limit=` in, `{ <items>, total, page, pages }` out (`/openings`, `/openings/:id/applicants`, `/applications/mine`; the last two also return per-status `counts` that ignore the status filter). `?limit=` alone is accepted by `/clubs` and `/events`. The applicant CSV export is deliberately unpaged.
+- **`utils/memo.js`:** a 60 s in-process cache for data that is the same for every visitor (`/stats`, `/clubs/categories`, the assistant's openings and events digests). It is disabled under `NODE_ENV=test` unless `MEMO_IN_TESTS=1`. Anything that writes openings or events must call `invalidateMemo("openings:")` / `invalidateMemo("events:")`. Never memoise anything that varies per user.
+- `compression` is mounted in `app.js` and skips `text/event-stream`; a compressor would buffer the AI chat.
+- `llm.js` keeps the per-request user/feature for usage logging in `AsyncLocalStorage` (`withUsageContext`), not a module variable, so concurrent model calls (an answer streaming while a score is computed) are attributed correctly.
+
 ### Data
 - Club content = `data/pec-clubs.json` (scraped) merged with `data/club-profiles.js` (hand-written "sell the club" content keyed by slug) at seed time. Club admins can edit it afterwards via `PUT /clubs/mine`.
 - `/clubs/mine*` routes are declared before `/clubs/:slug`, so `mine` isn't read as a slug. Keep that order when adding routes.
@@ -50,7 +59,9 @@ Frontend (`cd frontend`):
 ### Frontend
 - Import alias: `@/` → `src/`. All pages render inside `components/layout/AppLayout.jsx` through a single `createBrowserRouter` in `App.jsx`. Admin, assistant and profile pages are lazy-loaded. Route protection uses `<RequireAuth roles={[...]}>` from `components/layout/guards.jsx`.
 - API calls go through the shared `api` axios instance (`lib/api.js`, base `/api/v1`, with credentials). Show errors with `errorMessage(err)`. In dev, Vite proxies `/api` to `VITE_BACKEND_URL`, so there is no CORS. In production, `VITE_API_URL` points at a separate API origin, and the backend `CLIENT_URL` must list the frontend origin.
-- Redux only holds the auth user (`redux/authSlice.js`). Page data is fetched with `hooks/useFetch.js`.
+- Redux only holds the auth user (`redux/authSlice.js`). Page data is fetched with `useFetch(url)` or `usePaged(url, itemsKey)` from `hooks/useFetch.js`, both backed by one TanStack Query cache (`lib/queryClient.js`, 30 s stale time). The `api` interceptor drops the whole cache after any successful non-GET (except `/ai/` and `/auth/otp/`), so a mutation never leaves a stale list behind; new write paths that bypass `api` (raw `fetch`) must call `queryClient.invalidateQueries()` themselves.
+- `cdnImg(url, cssWidth)` in `lib/utils.js` adds Cloudinary `f_auto,q_auto,w_` to image URLs; use it for logos, covers and avatars. Uploads are capped at 1600 px by the server (`utils/cloudinary.js`).
+- The chat stream stays open briefly after the `done` event to deliver follow-up chips, so `useChatStream` tags each send with a run id and ignores events from older runs.
 
 ## Docs caveat
 

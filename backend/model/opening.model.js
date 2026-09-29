@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 // A recruitment drive, workshop or event registration that students apply to.
 const openingSchema = new mongoose.Schema(
   {
-    club: { type: mongoose.Schema.Types.ObjectId, ref: "Club", required: true, index: true },
+    club: { type: mongoose.Schema.Types.ObjectId, ref: "Club", required: true },
     title: { type: String, required: true, trim: true },
     description: { type: String, required: true },
     requirements: [{ type: String }],
@@ -20,6 +20,8 @@ const openingSchema = new mongoose.Schema(
 openingSchema.index({ title: "text", description: "text" }, { name: "opening_text" });
 
 openingSchema.index({ status: 1, deadline: 1 });
+// Club page, open counts per club and the admin's own list all start from one club.
+openingSchema.index({ club: 1, status: 1, deadline: 1 });
 
 // Open means both marked open and not past its deadline. A plain function rather
 // than a virtual, because most queries use .lean().

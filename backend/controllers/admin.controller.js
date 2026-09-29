@@ -1,4 +1,4 @@
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import { z } from "zod";
 import crypto from "crypto";
 import { Club } from "../model/club.model.js";
@@ -9,6 +9,7 @@ import { Event } from "../model/event.model.js";
 import { Otp } from "../model/otp.model.js";
 import { AiUsage } from "../model/aiUsage.model.js";
 import { HttpError } from "../utils/http.js";
+import { memo } from "../utils/memo.js";
 import { generatePassword } from "../utils/password.js";
 import { syncClubAdmins, setUserClub, setUserActive } from "../utils/admins.js";
 import { sendMail, otpEmail } from "../utils/mailer.js";
@@ -18,14 +19,19 @@ const OTP_MINUTES = 30;
 
 // Public numbers for the home page.
 export const siteStats = async (req, res) => {
-  const [clubs, openings, students, applications, events] = await Promise.all([
-    Club.countDocuments(),
-    Opening.countDocuments({ status: "open", deadline: { $gt: new Date() } }),
-    User.countDocuments({ role: "student" }),
-    Application.countDocuments(),
-    Event.countDocuments({ date: { $gte: new Date() } }),
-  ]);
-  res.json({ success: true, stats: { clubs, openings, students, applications, events } });
+  // The same five numbers for every visitor, so they are counted once a minute.
+  const stats = await memo("stats:site", 60_000, async () => {
+    const [clubs, openings, students, applications, events] = await Promise.all([
+      Club.countDocuments(),
+      Opening.countDocuments({ status: "open", deadline: { $gt: new Date() } }),
+      User.countDocuments({ role: "student" }),
+      Application.estimatedDocumentCount(),
+      Event.countDocuments({ date: { $gte: new Date() } }),
+    ]);
+    return { clubs, openings, students, applications, events };
+  });
+  res.set("Cache-Control", "public, max-age=60");
+  res.json({ success: true, stats });
 };
 
 export const listClubAdmins = async (req, res) => {

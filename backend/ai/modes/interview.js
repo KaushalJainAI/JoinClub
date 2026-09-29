@@ -8,7 +8,10 @@ export const INTERVIEW_TYPES = {
 export const DIFFICULTIES = ["easy", "medium", "hard"];
 
 // The server tracks progress in session.meta; the model only ever gets one step at a time.
-export function interviewSystem(meta) {
+// A single block with a cache breakpoint: the prompt is fixed for the whole interview.
+export const interviewSystem = (meta) => [{ type: "text", text: interviewPrompt(meta), cache_control: { type: "ephemeral" } }];
+
+function interviewPrompt(meta) {
   return `You are a friendly but sharp senior member of ${meta.club.name} at Punjab Engineering College, conducting a mock recruitment interview to help a student practise.
 
 Club: ${meta.club.name}. ${meta.club.pitch || meta.club.tagline || ""}

@@ -5,6 +5,42 @@
 > hundred applications). Phases 1 and 2 are the ones that get worse as students, followers
 > and recruitment seasons pile up, so do them before launch.
 
+## Status: implemented
+
+Every item below is in the code, with the decisions taken as recommended (follower counter in
+`Club`, `$text` plus prefix fallback, "Load more", TanStack Query). `npm test` (56 tests),
+`npm run check:indexes` and `npm run lint` pass, and the frontend builds. Where the result
+differs from the plan:
+
+- **1.2** The club page makes two batches of queries, not one: the openings' ids are needed
+  for the student's own applications and the applicant counts. It used to make four rounds.
+- **1.3** Existing databases are backfilled at server start (`utils/migrations.js`), not only
+  by the seed. The `{archivedAt, followerCount}` index was dropped again: the list is sorted
+  in JavaScript, so nothing queries it.
+- **1.4** Opening search no longer looks inside `requirements` (it isn't in the text index, and
+  changing a text index needs a rebuild). Club search matches the start of any word in the
+  name or short name.
+- **2.1** The optional single `/home` endpoint was not built; the home page now makes the same
+  five requests, each asking only for what it shows.
+- **2.2 / 2.3** Another session had already added pagination to openings and applicants. This
+  work added server-side applicant search, `?status=` and `counts` on My Applications, and the
+  `usePaged` hook behind every "Load more" button.
+- **2.4** `/stats` counts applications with `estimatedDocumentCount()` (approximate, instant).
+- **3.1 – 3.2** `withUsageContext` moved to `AsyncLocalStorage`; the old module variable would
+  have billed overlapping calls to the wrong feature.
+- **4.1** The code being replaced passed a raw `Buffer` to `cloudinary.uploader.upload`, which
+  doesn't take one. It now uses `upload_stream`.
+- **5.1** The app chunk grew from 56 KB to 71 KB gzipped (TanStack Query, plus an error
+  boundary and Sentry added meanwhile). `ChatWindow` (51 KB) is still lazy.
+
+**Not verified, because it needs something this environment lacks:**
+- Real uploads to Cloudinary (no keys): `uploadOptions()` is unit-tested, the network call isn't.
+- Prompt-cache hits on chat history (no Anthropic key): check `cache_read_input_tokens` in the
+  super-admin AI usage screen on the third helpdesk turn and the second interview turn.
+- The frontend in a browser. It has no tests; only lint and the build were run. Worth a click
+  through: Home, Clubs (search "robo"), Openings "Show more", My Applications "Load more",
+  admin Applicants (search, status tabs, accept/reject), and following a club.
+
 ## Summary
 
 | Phase | Theme | Items | Size | Why this order |

@@ -49,7 +49,7 @@ export default function ChatLauncher() {
             </DialogPrimitive.Close>
           </div>
           <Suspense fallback={<PageLoader />}>
-            <ChatWindow compact chat={chat} empty={<BuddyEmpty compact demo={status && !status.enabled} onPick={(t) => chat.send(t)} />} />
+            <ChatWindow compact regenerate chat={chat} empty={<BuddyEmpty compact demo={status && !status.enabled} onPick={(t) => chat.send(t)} />} />
           </Suspense>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

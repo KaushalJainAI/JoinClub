@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowUp, Square, Sparkles, AlertCircle, CornerDownRight, Copy, Check } from "lucide-react";
+import { ArrowUp, Square, Sparkles, AlertCircle, CornerDownRight, Copy, Check, RefreshCw, Mic, MicOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { visibleText } from "@/hooks/useChatStream";
 import { Button } from "@/components/ui/button";
@@ -55,7 +55,7 @@ function CopyButton({ text }) {
   );
 }
 
-function Message({ m, stage, onPick, renderExtra, isLast }) {
+function Message({ m, stage, onPick, renderExtra, isLast, onRegenerate }) {
   if (m.role === "user") {
     return (
       <div className="flex justify-end animate-fade-up">
@@ -107,7 +107,16 @@ function Message({ m, stage, onPick, renderExtra, isLast }) {
             ))}
           </div>
         )}
-        {!m.pending && text && <CopyButton text={text} />}
+        {!m.pending && (text || m.error) && (
+          <div className="flex items-center gap-1">
+            {text && <CopyButton text={text} />}
+            {isLast && onRegenerate && (
+              <button onClick={onRegenerate} className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground" aria-label="Regenerate answer">
+                <RefreshCw className="h-3.5 w-3.5" /> Regenerate
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -117,8 +126,38 @@ function Message({ m, stage, onPick, renderExtra, isLast }) {
  * chat: the object returned by useChatStream.
  * empty: shown before the first message. inputDisabled: e.g. a finished interview.
  */
-export default function ChatWindow({ chat, empty, placeholder = "Ask anything about clubs at PEC…", inputDisabled, disabledHint, renderExtra, className, compact }) {
+// The browser's own speech recognition (Chrome, Edge, Safari). Nothing is sent to our server.
+const SpeechRecognition = typeof window !== "undefined" ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
+
+/**
+ * voice: show a microphone that dictates into the input (used for interview answers).
+ * regenerate: offer "Regenerate" on the last answer.
+ */
+export default function ChatWindow({ chat, empty, placeholder = "Ask anything about clubs at PEC…", inputDisabled, disabledHint, renderExtra, className, compact, voice, regenerate }) {
   const [draft, setDraft] = useState("");
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef(null);
+
+  const toggleVoice = () => {
+    if (listening) return recognitionRef.current?.stop();
+    const r = new SpeechRecognition();
+    r.lang = "en-IN";
+    r.continuous = true;
+    r.interimResults = false;
+    r.onresult = (e) => {
+      const said = Array.from(e.results)
+        .slice(e.resultIndex)
+        .map((res) => res[0].transcript)
+        .join(" ");
+      setDraft((d) => `${d}${d && !d.endsWith(" ") ? " " : ""}${said.trim()}`);
+    };
+    r.onend = () => setListening(false);
+    r.onerror = () => setListening(false);
+    recognitionRef.current = r;
+    r.start();
+    setListening(true);
+  };
+  useEffect(() => () => recognitionRef.current?.stop(), []);
   const endRef = useRef(null);
   const inputRef = useRef(null);
   const { messages, send, stop, streaming, stage } = chat;
@@ -130,6 +169,7 @@ export default function ChatWindow({ chat, empty, placeholder = "Ask anything ab
   const submit = (e) => {
     e?.preventDefault();
     if (!draft.trim() || streaming || inputDisabled) return;
+    if (listening) recognitionRef.current?.stop();
     send(draft);
     setDraft("");
     if (inputRef.current) inputRef.current.style.height = "auto";
@@ -138,7 +178,19 @@ export default function ChatWindow({ chat, empty, placeholder = "Ask anything ab
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)}>
       <div className={cn("flex-1 space-y-5 overflow-y-auto", compact ? "p-4" : "p-4 md:p-6")}>
-        {messages.length === 0 ? empty : messages.map((m, i) => <Message key={m.id} m={m} stage={stage} onPick={(o) => send(o)} renderExtra={renderExtra} isLast={i === messages.length - 1} />)}
+        {messages.length === 0
+          ? empty
+          : messages.map((m, i) => (
+              <Message
+                key={m.id}
+                m={m}
+                stage={stage}
+                onPick={(o) => send(o)}
+                renderExtra={renderExtra}
+                isLast={i === messages.length - 1}
+                onRegenerate={regenerate && !streaming && m.role === "assistant" && messages.some((x) => x.role === "user") ? chat.regenerate : null}
+              />
+            ))}
         <div ref={endRef} />
       </div>
       <form onSubmit={submit} className="border-t bg-background/80 p-3 backdrop-blur">
@@ -162,6 +214,19 @@ export default function ChatWindow({ chat, empty, placeholder = "Ask anything ab
               className="max-h-40 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
               disabled={inputDisabled}
             />
+            {voice && SpeechRecognition && !streaming && (
+              <Button
+                type="button"
+                size="icon"
+                variant={listening ? "destructive" : "ghost"}
+                className="h-9 w-9 rounded-xl"
+                onClick={toggleVoice}
+                aria-label={listening ? "Stop dictation" : "Answer by voice"}
+                title={listening ? "Stop dictation" : "Answer by voice"}
+              >
+                {listening ? <MicOff /> : <Mic />}
+              </Button>
+            )}
             {streaming ? (
               <Button type="button" size="icon" variant="secondary" onClick={stop} className="h-9 w-9 rounded-xl" aria-label="Stop">
                 <Square className="fill-current" />

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { FileText, Compass, Mic, Undo2 } from "lucide-react";
-import { useFetch } from "@/hooks/useFetch";
+import { usePaged } from "@/hooks/useFetch";
 import { api, errorMessage } from "@/lib/api";
 import { STATUS_META } from "@/lib/categories";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
@@ -50,12 +50,13 @@ function HistoryList({ history }) {
 }
 
 export default function MyApplications() {
-  const { data, loading, reload } = useFetch("/applications/mine");
   const [filter, setFilter] = useState("all");
   const [busy, setBusy] = useState(null);
-  const apps = data?.applications || [];
-  const shown = filter === "all" ? apps : apps.filter((a) => a.status === filter);
-  const counts = apps.reduce((acc, a) => ((acc[a.status] = (acc[a.status] || 0) + 1), acc), {});
+  // The status filter is applied by the server, so "Load more" pages through that status.
+  const { items: shown, meta, total, loading, loadingMore, hasMore, loadMore, reload } = usePaged(`/applications/mine${filter !== "all" ? `?status=${filter}` : ""}`, "applications");
+  // Per-status totals for the whole list come from the server, whatever the filter.
+  const counts = meta?.counts || {};
+  const hasApplications = (counts.all || 0) > 0;
 
   const withdraw = async (id) => {
     if (!confirm("Withdraw this application? You can apply again while the opening is still open.")) return;
@@ -94,19 +95,19 @@ export default function MyApplications() {
       </div>
 
       <div className="mt-6 space-y-4">
-        {loading && !data ? (
+        {loading && shown.length === 0 ? (
           Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="h-36" />)
         ) : shown.length === 0 ? (
           <EmptyState
-            icon={apps.length ? FileText : Compass}
-            title={apps.length ? "Nothing here" : "You haven't applied yet"}
+            icon={hasApplications ? FileText : Compass}
+            title={hasApplications ? "Nothing here" : "You haven't applied yet"}
             action={
               <Button asChild>
                 <Link to="/openings">See who's recruiting</Link>
               </Button>
             }
           >
-            {apps.length ? "No applications with this status." : "Find a club you love and send your first application. It takes about five minutes."}
+            {hasApplications ? "No applications with this status." : "Find a club you love and send your first application. It takes about five minutes."}
           </EmptyState>
         ) : (
           shown.map((a) => (
@@ -148,6 +149,13 @@ export default function MyApplications() {
           ))
         )}
       </div>
+      {hasMore && (
+        <div className="mt-8 text-center">
+          <Button variant="outline" onClick={loadMore} loading={loadingMore}>
+            Load more ({total - shown.length} more)
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

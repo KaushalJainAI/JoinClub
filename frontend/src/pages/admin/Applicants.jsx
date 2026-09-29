@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Download, Search, Sparkles, Check, X, Star, Mail, Phone, FileText, Users } from "lucide-react";
-import { useFetch, useDebounced } from "@/hooks/useFetch";
+import { usePaged, useDebounced } from "@/hooks/useFetch";
 import { api, API_BASE, errorMessage } from "@/lib/api";
 import { STATUS_META } from "@/lib/categories";
 import { cn, formatDate, formatDateTime, relativeTime } from "@/lib/utils";
@@ -196,24 +196,22 @@ export default function Applicants() {
   const [status, setStatus] = useState("all");
   const [q, setQ] = useState("");
   const dq = useDebounced(q);
-  const [limit, setLimit] = useState(50);
-  const query = new URLSearchParams({ ...(status !== "all" && { status }), ...(dq && { q: dq }), limit });
-  const { data, loading, setData } = useFetch(`/openings/${id}/applicants?${query}`);
+  const query = new URLSearchParams({ ...(status !== "all" && { status }), ...(dq && { q: dq }) }).toString();
+  const { items: apps, first, meta, total, loading, loadingMore, hasMore, loadMore, patchItems } = usePaged(`/openings/${id}/applicants${query ? `?${query}` : ""}`, "applications", { pageSize: 50 });
+  const data = first; // the opening's own fields are the same on every page
   const selectedId = params.get("app");
-  const apps = data?.applications || [];
   const selected = apps.find((a) => a._id === selectedId);
   // Per-status totals for the whole opening come from the server, whatever the filter.
-  const counts = data?.counts || {};
+  const counts = meta?.counts || {};
 
   const open = (appId) => setParams(appId ? { app: appId } : {}, { replace: true });
 
   const onChanged = (updated) => {
-    setData((d) => ({
-      ...d,
-      applications: d.applications.map((a) =>
+    patchItems((list) =>
+      list.map((a) =>
         a._id === updated._id ? { ...a, status: updated.status, adminNote: updated.adminNote, history: updated.history?.length ? updated.history : a.history } : a
-      ),
-    }));
+      )
+    );
   };
 
   return (
@@ -304,10 +302,10 @@ export default function Applicants() {
         )}
       </div>
 
-      {data && data.total > apps.length && (
+      {hasMore && (
         <div className="text-center">
-          <Button variant="outline" onClick={() => setLimit((n) => Math.min(200, n + 50))} loading={loading}>
-            Load more ({data.total - apps.length} more)
+          <Button variant="outline" onClick={loadMore} loading={loadingMore}>
+            Load more ({total - apps.length} more)
           </Button>
         </div>
       )}

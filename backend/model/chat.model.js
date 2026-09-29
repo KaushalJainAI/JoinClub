@@ -10,7 +10,7 @@ const CHAT_TTL_SECONDS = CHAT_RETENTION_DAYS * 24 * 60 * 60;
 
 const chatSessionSchema = new mongoose.Schema(
   {
-    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     mode: { type: String, enum: CHAT_MODES, required: true },
     title: { type: String, default: "New chat" },
     // Interview progress lives here so the server, not the model, keeps count.
@@ -21,7 +21,7 @@ const chatSessionSchema = new mongoose.Schema(
 
 const chatMessageSchema = new mongoose.Schema(
   {
-    session: { type: mongoose.Schema.Types.ObjectId, ref: "ChatSession", required: true, index: true },
+    session: { type: mongoose.Schema.Types.ObjectId, ref: "ChatSession", required: true },
     role: { type: String, enum: ["user", "assistant"], required: true },
     content: { type: String, default: "" },
     options: [{ type: String }],
@@ -36,4 +36,7 @@ export const ChatMessage = mongoose.model("ChatMessage", chatMessageSchema);
 // One TTL per collection: a session expires on its last activity, a message on when it was
 // sent, so neither outlives the retention window by more than a conversation's length.
 chatSessionSchema.index({ updatedAt: 1 }, { expireAfterSeconds: CHAT_TTL_SECONDS, name: "chat_session_ttl" });
+// The history sidebar lists a user's chats by recent activity; a chat loads its messages in order.
+chatSessionSchema.index({ user: 1, updatedAt: -1 });
+chatMessageSchema.index({ session: 1, createdAt: 1 });
 chatMessageSchema.index({ createdAt: 1 }, { expireAfterSeconds: CHAT_TTL_SECONDS, name: "chat_message_ttl" });

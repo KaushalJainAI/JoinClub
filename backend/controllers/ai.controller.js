@@ -4,7 +4,7 @@ import { Club } from "../model/club.model.js";
 import { Opening } from "../model/opening.model.js";
 import { Application } from "../model/application.model.js";
 import { HttpError } from "../utils/http.js";
-import { aiEnabled, MODEL, SMALL_MODEL, streamText, generateJSON, friendlyAiError, withUsageContext } from "../ai/llm.js";
+import { aiEnabled, MODEL, SMALL_MODEL, streamText, generateJSON, friendlyAiError, withUsageContext, cacheHistory } from "../ai/llm.js";
 import { openSse, extractOptions } from "../ai/sse.js";
 import { helpdeskSystem, helpdeskContext, STARTERS, SuggestionsSchema, SUGGEST_PROMPT } from "../ai/modes/helpdesk.js";
 import { CheckSchema, CHECK_SYSTEM, checkPrompt, clampScores } from "../ai/modes/checker.js";
@@ -127,51 +127,63 @@ async function runHelpdesk({ send, message, prior, userId, signal }) {
   let text;
   if (aiEnabled()) {
     const context = await helpdeskContext(userId, message);
-    const messages = [...toApiMessages(prior), { role: "user", content: `<context>\n${context}\n</context>\n\n${message}` }];
+    const messages = [...cacheHistory(toApiMessages(prior)), { role: "user", content: `<context>\n${context}\n</context>\n\n${message}` }];
     text = await pipe(send, streamText({ system: await helpdeskSystem(), messages, effort: "medium", signal }));
   } else {
     text = await pipe(send, streamDemo(await demoHelpdesk(message, userId), signal));
   }
+  // Follow-up chips are generated after the answer is delivered (see chat()), so the
+  // student can type again as soon as the text has finished.
   const { content, options } = extractOptions(text);
-  const suggestions = options.length ? [] : await suggestFollowUps(message, content);
-  return { content, options, suggestions };
+  return { content, options, suggestions: [] };
+}
+
+// Scores one interview answer. Never rejects: a failed score becomes a middling one, so the
+// interview can go on.
+async function scoreAnswer({ meta, lastQuestion, answer }) {
+  try {
+    return aiEnabled()
+      ? await withUsageContext({ feature: "interview-score" }, () =>
+          generateJSON({
+            model: SMALL_MODEL,
+            system: SCORE_SYSTEM,
+            messages: [{ role: "user", content: `Difficulty: ${meta.difficulty}\n\nQuestion:\n${lastQuestion}\n\nAnswer:\n${answer}` }],
+            schema: AnswerScoreSchema,
+            maxTokens: 1024,
+          })
+        )
+      : demoScore(answer);
+  } catch (err) {
+    console.warn("[ai] answer scoring failed:", err.message);
+    return { score: 3, note: "" };
+  }
 }
 
 async function runInterview({ send, session, message, prior, signal }) {
   const meta = session.meta;
   const answer = message.trim();
 
-  if (meta.asked > 0 && answer) {
-    send("status", { stage: "scoring" });
-    const lastQuestion = [...prior].reverse().find((m) => m.role === "assistant")?.content || "";
-    let scored;
-    try {
-      scored = aiEnabled()
-        ? await withUsageContext({ feature: "interview-score" }, () =>
-            generateJSON({
-              model: SMALL_MODEL,
-              system: SCORE_SYSTEM,
-              messages: [{ role: "user", content: `Difficulty: ${meta.difficulty}\n\nQuestion:\n${lastQuestion}\n\nAnswer:\n${answer}` }],
-              schema: AnswerScoreSchema,
-              maxTokens: 1024,
-            })
-          )
-        : demoScore(answer);
-    } catch (err) {
-      console.warn("[ai] answer scoring failed:", err.message);
-      scored = { score: 3, note: "" };
-    }
-    meta.scores.push({ question: meta.asked, score: Math.min(5, Math.max(1, Math.round(scored.score))), note: scored.note });
-  }
+  // The score is only needed for the report card, so it runs while the next question
+  // streams instead of holding it back.
+  const questionNo = meta.asked;
+  const scoring =
+    questionNo > 0 && answer
+      ? scoreAnswer({ meta, lastQuestion: [...prior].reverse().find((m) => m.role === "assistant")?.content || "", answer })
+      : null;
 
   send("status", { stage: "thinking" });
   let content;
   if (aiEnabled()) {
     const step = `<interviewer_step>${stepInstruction(meta)}</interviewer_step>`;
-    const messages = [...toApiMessages(prior), { role: "user", content: answer ? `${answer}\n\n${step}` : step }];
+    const messages = [...cacheHistory(toApiMessages(prior)), { role: "user", content: answer ? `${answer}\n\n${step}` : step }];
     content = await pipe(send, streamText({ system: interviewSystem(meta), messages, effort: "medium", signal }));
   } else {
     content = await pipe(send, streamDemo(demoInterviewReply(meta, answer), signal));
+  }
+
+  if (scoring) {
+    const scored = await scoring;
+    meta.scores.push({ question: questionNo, score: Math.min(5, Math.max(1, Math.round(scored.score))), note: scored.note });
   }
 
   let report = null;
@@ -201,7 +213,7 @@ async function runInterview({ send, session, message, prior, signal }) {
 
 export const chat = async (req, res) => {
   const { mode = "helpdesk", sessionId, setup } = req.body;
-  const message = String(req.body.message || "").slice(0, 4000);
+  let message = String(req.body.message || "").slice(0, 4000);
 
   if (!["helpdesk", "interview"].includes(mode)) throw new HttpError(400, "Unknown chat mode.");
   if (mode === "interview" && !req.id) throw new HttpError(401, "Log in to practise interviews.");
@@ -209,6 +221,7 @@ export const chat = async (req, res) => {
   // Guests get a stateless helpdesk; history comes from the browser.
   let session = null;
   let prior = [];
+  let regenerating = null; // { question, answer }: the saved pair a regenerate replaces
   if (req.id) {
     if (sessionId) {
       session = await ChatSession.findOne({ _id: sessionId, user: req.id });
@@ -218,6 +231,13 @@ export const chat = async (req, res) => {
       // the model needs every earlier answer to avoid repeating topics, and the final
       // report must quote question 1. The helpdesk only needs recent turns.
       prior = await loadHistory(session._id, mode);
+      // Regenerate: answer the last saved question again, and replace the old answer.
+      if (req.body.regenerate === true && mode === "helpdesk") {
+        const [question, answer] = prior.slice(-2);
+        if (question?.role !== "user" || answer?.role !== "assistant") throw new HttpError(400, "There's no answer to regenerate yet.");
+        regenerating = { question, answer };
+        prior = prior.slice(0, -2);
+      }
     } else {
       const meta = mode === "interview" ? await buildInterviewMeta(setup) : {};
       const title = mode === "interview" ? `${meta.club.shortName || meta.club.name} · ${meta.type.toUpperCase()} interview` : message.slice(0, 60) || "New chat";
@@ -236,6 +256,7 @@ export const chat = async (req, res) => {
       .filter((m) => m.content.trim());
   }
 
+  if (regenerating) message = regenerating.question.content;
   if (mode === "helpdesk" && !message.trim()) throw new HttpError(400, "Type a message first.");
   if (mode === "interview" && session.meta.done) throw new HttpError(400, "This interview is finished. Start a new one to practise again.");
   if (mode === "interview" && session.meta.asked > 0 && !message.trim()) throw new HttpError(400, "Type your answer first.");
@@ -261,7 +282,8 @@ export const chat = async (req, res) => {
 
     let saved = null;
     if (session) {
-      if (message.trim()) pendingUserMessage = await ChatMessage.create({ session: session._id, role: "user", content: message });
+      if (regenerating) await ChatMessage.deleteOne({ _id: regenerating.answer._id });
+      else if (message.trim()) pendingUserMessage = await ChatMessage.create({ session: session._id, role: "user", content: message });
       saved = await ChatMessage.create({ session: session._id, role: "assistant", content: result.content, options: result.options, suggestions: result.suggestions });
       await session.save(); // bumps updatedAt, persists interview meta
     }
@@ -273,6 +295,22 @@ export const chat = async (req, res) => {
       content: result.content,
       meta: mode === "interview" ? { asked: session.meta.asked, total: session.meta.total, done: session.meta.done } : undefined,
     });
+
+    // The answer is delivered and saved; the follow-up chips are a nicety that follows on
+    // the same stream. A question that offered option buttons doesn't need them.
+    if (mode === "helpdesk" && !result.options.length && !abort.signal.aborted) {
+      // Its own guard: the reply is already delivered, so a failure here must not send an
+      // error event or fall into the handler below, which deletes the saved question.
+      try {
+        const suggestions = await withUsageContext({ user: req.id, feature: mode }, () => suggestFollowUps(message, result.content));
+        if (suggestions.length) {
+          send("suggestions", { suggestions });
+          if (saved) await ChatMessage.updateOne({ _id: saved._id }, { suggestions });
+        }
+      } catch (err) {
+        console.warn("[ai] follow-up chips failed:", err.message);
+      }
+    }
   } catch (err) {
     // The question never reached the model, so it never got an answer: drop it rather than
     // leave a question in the transcript that the assistant did not respond to.

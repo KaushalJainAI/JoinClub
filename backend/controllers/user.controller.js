@@ -93,7 +93,7 @@ export const deleteMyAccount = async (req, res) => {
       { applicant: req.id },
       { $set: { answers: [], applicant: anonymousId, applicantDeleted: true, adminNote: "" } }
     ),
-    Club.updateMany({ followers: req.id }, { $pull: { followers: req.id } }),
+    Club.updateMany({ followers: req.id }, { $pull: { followers: req.id }, $inc: { followerCount: -1 } }),
     ChatMessage.deleteMany({ session: { $in: sessionIds.map((s) => s._id) } }),
     ChatSession.deleteMany({ user: req.id }),
   ]);

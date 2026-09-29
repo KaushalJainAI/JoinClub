@@ -1,4 +1,5 @@
 import axios from "axios";
+import { queryClient } from "./queryClient";
 
 // Same-origin "/api/v1" in dev (Vite proxies it) and whenever the API is served from
 // the frontend's domain; VITE_API_URL points at a separate API origin otherwise.
@@ -15,8 +16,18 @@ export const api = axios.create({
 const authHandlers = { onUnauthorized: null, onMustChangePassword: null };
 export const setAuthHandlers = (h) => Object.assign(authHandlers, h);
 
+// Writes that change nothing a list shows: AI calls, and OTP codes being sent.
+const READ_ONLY_POSTS = ["/ai/", "/auth/otp/"];
+
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    // A successful write may have changed any list on any page (an application, a follow,
+    // a login that changes "my status" everywhere), so cached reads are dropped and the
+    // ones on screen refetch.
+    const write = res.config.method && res.config.method !== "get";
+    if (write && !READ_ONLY_POSTS.some((p) => (res.config.url || "").startsWith(p))) queryClient.invalidateQueries();
+    return res;
+  },
   (error) => {
     const status = error.response?.status;
     const code = error.response?.data?.code;

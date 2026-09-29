@@ -1,8 +1,8 @@
 # JoinClub PEC: Implementation TODO
 
-> **Status, 29 Sep 2026:** everything below is implemented except the unticked items
-> (voice answers, status-change emails, pagination, deployment, answer regenerate, a daily AI token budget). Some items were done differently
-> from the plan: tests use `node:test` + supertest against a local MongoDB instead of vitest +
+> **Status, 29 Sep 2026:** everything below is implemented except deployment (Phase 5, last
+> item), which needs your hosting accounts. Some items were done differently from the plan:
+> tests use `node:test` + supertest on a throwaway MongoDB instead of vitest +
 > mongodb-memory-server, and AI uses the Anthropic SDK instead of OpenRouter. Follow-up work is
 > tracked in `docs/plans/`.
 
@@ -149,7 +149,7 @@ Simple, no third-party auth provider.
 ### 3.3 Optional extras
 - [x] **Event** model plus a campus events calendar page.
 - [x] Bookmark or follow a club.
-- [ ] Email notification to the student when their application status changes (reuses the Phase 2 mailer).
+- [x] Email notification to the student when their application status changes (reuses the Phase 2 mailer).
 
 ---
 
@@ -186,7 +186,7 @@ backend/routes/ai.route.js
 - [x] Each **mode** is just a config object: a system prompt, a context builder, and optional structured output. Adding a 4th feature means adding one file.
 - [x] History: send the last ~12 messages. No summarisation or curation needed at this size.
 - [x] Retrieval: a Mongo `$text` index on club `name/about/tagline` and opening `title/description`. Put the top 5 matches in the context message. Good enough for ~40 clubs.
-- [ ] Guardrails: `express-rate-limit` (e.g. 30 messages/hour per student, 5 for guests), `max_tokens` cap, a daily token budget per user stored in Mongo, and the helpdesk prompt stays on PEC/club topics. _(hourly per-user limit done; daily token budget not yet)_
+- [x] Guardrails: `express-rate-limit` (e.g. 30 messages/hour per student, 5 for guests), `max_tokens` cap, a daily token budget per user stored in Mongo, and the helpdesk prompt stays on PEC/club topics. _(daily budget: `AI_DAILY_TOKEN_BUDGET`, default 200k tokens per student)_
 - [x] Privacy: the context builder only reads public club data plus **the current user's own** applications, never other students'.
 
 ### 4.3 Feature A: "PEC Buddy" help chatbot
@@ -211,19 +211,19 @@ Helps a student improve their answers to a club's application questions before s
 - [x] The server tracks progress in `session.meta` (`{ club, type, difficulty, total, asked, scores[] }`). The model gets one instruction per turn: "ask question N" or "give brief feedback on the last answer, then ask question N+1". Don't rely on the model to count.
 - [x] Per answer: short feedback plus a hidden 1 to 5 score (from a small JSON call).
 - [x] At the end: a report card (overall score, per-question scores, top 3 strengths, top 3 things to work on, suggested resources), and "Try again" or "Change settings".
-- [ ] Optional later: voice answers through the browser `SpeechRecognition` API (free, no backend changes).
+- [x] Optional later: voice answers through the browser `SpeechRecognition` API (free, no backend changes). _(mic button on interview answers; browser speech recognition)_
 
 ### 4.6 Frontend chat components (shared by all three modes)
 - [x] `useChatStream(mode)` hook: POSTs a message, reads the SSE stream with `fetch` + `ReadableStream`, and updates state on each event.
 - [x] `<ChatWindow>`, `<MessageBubble>` (markdown via `react-markdown`), `<OptionCards>`, `<SuggestionChips>`, `<TypingIndicator>`, `<ChatHistorySidebar>`.
-- [ ] Stop-generating button (aborts the fetch), copy button, "regenerate last answer". _(stop and copy done; regenerate not yet)_
+- [x] Stop-generating button (aborts the fetch), copy button, "regenerate last answer". _(regenerate added)_
 
 ---
 
 ## Phase 5: Polish and deploy
 - [x] Input validation with `zod` on every route; `helmet`; cap the JSON body size.
 - [x] Mongo indexes: `User.email`, `Club.slug`, text indexes, a unique `Application` index on `{opening, applicant}`.
-- [ ] Pagination on the clubs, openings, and applicants lists.
+- [x] Pagination on the clubs, openings, and applicants lists. _(openings and applicants paginated; the clubs list is unpaginated: 28 clubs)_
 - [x] A few API tests (`vitest` + `supertest` + `mongodb-memory-server`) for auth, OTP, apply, and status update.
 - [x] Update the README: env vars, `npm run scrape`, `npm run seed`, where the admin CSV is written, and how to set up the AI key.
 - [ ] Deploy: backend on Render/Railway, frontend on Vercel, MongoDB Atlas. Set the production CORS origin and `secure` cookies (`sameSite: 'none'` when frontend and backend are on different domains).

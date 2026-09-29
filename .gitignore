@@ -1,7 +1,10 @@
 node_modules/
 .env
 .env.*
+!**/.env.example
 dist/
-!.env.example
 output/
 backend/scripts/.cache/
+*.log
+coverage/
+.DS_Store

@@ -18,6 +18,7 @@ export function useChatStream(mode, { loggedIn = false } = {}) {
   const [stage, setStage] = useState(null);
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef(null);
+  const runRef = useRef(0); // id of the newest send(); older streams stop touching the UI
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
@@ -29,20 +30,28 @@ export function useChatStream(mode, { loggedIn = false } = {}) {
     });
 
   const send = useCallback(
-    async (text = "", { setup } = {}) => {
+    async (text = "", { setup, regenerate = false } = {}) => {
       if (streaming) return;
       const message = text.trim();
-      const history = messagesRef.current.filter((m) => !m.error).map((m) => ({ role: m.role, content: m.content }));
-      setMessages((prev) => [
+      // Regenerating drops the last reply (and, for guests, the question it answered from
+      // the history sent along, since the question is re-sent as `message`).
+      const kept = regenerate ? messagesRef.current.slice(0, messagesRef.current.at(-1)?.role === "assistant" ? -1 : undefined) : messagesRef.current;
+      const history = (regenerate ? kept.slice(0, -1) : kept).filter((m) => !m.error).map((m) => ({ role: m.role, content: m.content }));
+      setMessages(() => [
         // Tapping an option consumes the option row it came from.
-        ...prev.map((m) => (m.options?.length ? { ...m, options: [] } : m)),
-        ...(message ? [{ id: uid(), role: "user", content: message }] : []),
+        ...kept.map((m) => (m.options?.length ? { ...m, options: [] } : m)),
+        ...(message && !regenerate ? [{ id: uid(), role: "user", content: message }] : []),
         { id: uid(), role: "assistant", content: "", pending: true },
       ]);
       setStreaming(true);
       setStage("thinking");
       const controller = new AbortController();
       abortRef.current = controller;
+      // The server keeps the stream open for a moment after "done" to send follow-up chips,
+      // and the student may already have sent the next message. Only the newest run may
+      // touch the UI; an older one stops reading.
+      const runId = ++runRef.current;
+      const current = () => runRef.current === runId;
 
       try {
         const res = await fetch(`${API_BASE}/ai/chat`, {
@@ -50,7 +59,7 @@ export function useChatStream(mode, { loggedIn = false } = {}) {
           credentials: "include",
           signal: controller.signal,
           headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
-          body: JSON.stringify({ mode, sessionId, message, setup, history: loggedIn ? undefined : history }),
+          body: JSON.stringify({ mode, sessionId, message, setup, regenerate: regenerate || undefined, history: loggedIn ? undefined : history }),
         });
         if (!res.ok || !res.body) {
           const body = await res.json().catch(() => ({}));
@@ -63,6 +72,10 @@ export function useChatStream(mode, { loggedIn = false } = {}) {
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
+          if (!current()) {
+            reader.cancel().catch(() => {});
+            break;
+          }
           buffer += decoder.decode(value, { stream: true });
           const frames = buffer.split("\n\n");
           buffer = frames.pop();
@@ -94,6 +107,9 @@ export function useChatStream(mode, { loggedIn = false } = {}) {
               case "done":
                 patchLast((m) => ({ ...m, content: ev.content, pending: false }));
                 if (ev.meta) setMeta((prev) => ({ ...prev, ...ev.meta }));
+                // Free the input now; the chips (if any) arrive after this on the same stream.
+                setStreaming(false);
+                setStage(null);
                 break;
               case "error":
                 patchLast((m) => ({ ...m, pending: false, error: ev.message }));
@@ -102,16 +118,19 @@ export function useChatStream(mode, { loggedIn = false } = {}) {
           }
         }
       } catch (err) {
+        if (!current()) return;
         if (err.name === "AbortError") {
           patchLast((m) => ({ ...m, pending: false, content: visibleText(m.content) || "_Stopped._" }));
         } else {
           patchLast((m) => ({ ...m, pending: false, error: err.message || "Something went wrong." }));
         }
       } finally {
-        patchLast((m) => (m.pending ? { ...m, pending: false } : m));
-        setStreaming(false);
-        setStage(null);
-        abortRef.current = null;
+        if (current()) {
+          patchLast((m) => (m.pending ? { ...m, pending: false } : m));
+          setStreaming(false);
+          setStage(null);
+          abortRef.current = null;
+        }
       }
     },
     [mode, sessionId, streaming, loggedIn]
@@ -119,14 +138,27 @@ export function useChatStream(mode, { loggedIn = false } = {}) {
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
 
+  // Ask the last question again and replace the answer.
+  const regenerate = useCallback(() => {
+    const lastUser = [...messagesRef.current].reverse().find((m) => m.role === "user");
+    if (lastUser) send(lastUser.content, { regenerate: true });
+  }, [send]);
+
   const reset = useCallback(() => {
+    runRef.current++; // detach whatever stream is still open (it may be just the chips)
     abortRef.current?.abort();
+    setStreaming(false);
+    setStage(null);
     setMessages([]);
     setSessionId(null);
     setMeta(null);
   }, []);
 
   const loadSession = useCallback(async (id) => {
+    runRef.current++;
+    abortRef.current?.abort();
+    setStreaming(false);
+    setStage(null);
     try {
       const { data } = await api.get(`/ai/sessions/${id}`);
       setSessionId(id);
@@ -145,5 +177,5 @@ export function useChatStream(mode, { loggedIn = false } = {}) {
     }
   }, []);
 
-  return { messages, send, stop, reset, loadSession, streaming, stage, sessionId, meta };
+  return { messages, send, stop, regenerate, reset, loadSession, streaming, stage, sessionId, meta };
 }
