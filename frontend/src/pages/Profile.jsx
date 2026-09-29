@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import { toast } from "sonner";
-import { Camera, FileText, ShieldCheck, MailCheck, MailWarning } from "lucide-react";
+import { Camera, FileText, ShieldCheck, MailCheck, MailWarning, Download, Trash2 } from "lucide-react";
 import { api, errorMessage } from "@/lib/api";
 import { setUser } from "@/redux/authSlice";
 import { Button } from "@/components/ui/button";
@@ -35,7 +35,7 @@ export default function Profile() {
   const isStudent = user.role === "student";
 
   useEffect(() => {
-    if (hash === "#security") document.getElementById("security")?.scrollIntoView({ behavior: "smooth" });
+    if (hash) document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: "smooth" });
   }, [hash]);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -167,6 +167,121 @@ export default function Profile() {
           <ChangePassword />
         </CardContent>
       </Card>
+
+      <PrivacyCard />
     </div>
+  );
+}
+
+function PrivacyCard() {
+  const { user } = useSelector((s) => s.auth);
+  const dispatch = useDispatch();
+  const [busy, setBusy] = useState(null);
+
+  const savePrefs = async (patch) => {
+    setBusy("prefs");
+    try {
+      // JSON, not FormData: the toggles are real booleans, not multipart strings.
+      const { data } = await api.put("/users/profile", patch);
+      dispatch(setUser(data.user));
+      toast.success("Privacy settings updated.");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const download = async () => {
+    setBusy("export");
+    try {
+      const { data } = await api.get("/users/me/export");
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `joinclub-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const erase = async () => {
+    const typed = prompt(`Type DELETE to erase your account${user.role === "student" ? " (your applications stay, anonymised)" : ""}. This can't be undone.`);
+    if (typed !== "DELETE") return;
+    setBusy("delete");
+    try {
+      const { data } = await api.delete("/users/me");
+      toast.success(data.message);
+      dispatch(setUser(null));
+      location.href = "/";
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Card id="privacy" className="scroll-mt-24">
+      <CardHeader>
+        <CardTitle>Privacy and AI</CardTitle>
+        <CardDescription>
+          What the AI features may use, and everything we hold about you. Full details in the{" "}
+          <Link to="/privacy" className="font-medium text-primary hover:underline">
+            privacy notice
+          </Link>
+          .
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Toggle
+          label="Let AI features use my data"
+          hint="PEC Buddy, the answer checker and mock interviews send your profile and answers to Anthropic. Off means those features stay off; everything else works."
+          checked={user.consentAi !== false}
+          onChange={(v) => savePrefs({ consentAi: v })}
+          busy={busy === "prefs"}
+        />
+        {user.role === "student" && (
+          <Toggle
+            label="Let clubs see an AI summary of my applications"
+            hint="Club admins can generate a one-line AI summary of your answers. It is labelled as AI-generated; they still decide."
+            checked={user.aiApplicantSummary !== false}
+            onChange={(v) => savePrefs({ aiApplicantSummary: v })}
+            busy={busy === "prefs"}
+          />
+        )}
+        <div className="flex flex-wrap gap-2 pt-1">
+          <Button variant="outline" onClick={download} loading={busy === "export"}>
+            <Download /> Export my data (JSON)
+          </Button>
+          <Button variant="destructive" onClick={erase} loading={busy === "delete"}>
+            <Trash2 /> Delete my account…
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Toggle({ label, hint, checked, onChange, busy }) {
+  return (
+    <label className="flex cursor-pointer items-start justify-between gap-4 rounded-xl border p-4">
+      <span>
+        <span className="block text-sm font-semibold">{label}</span>
+        <span className="mt-0.5 block text-sm text-muted-foreground">{hint}</span>
+      </span>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={busy}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-1 h-5 w-5 shrink-0 accent-primary"
+        aria-label={label}
+      />
+    </label>
   );
 }
