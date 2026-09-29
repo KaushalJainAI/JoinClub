@@ -17,7 +17,7 @@ and `NODE_ENV=production` (cookies become `SameSite=None; Secure`).
 
 Before going live:
 1. Set a long random `SECRET_KEY`.
-2. Run `npm run seed` only against a local database; it refuses remote URIs unless you pass `--i-know-this-is-production`.
-   For production, import clubs and create admin accounts deliberately.
+2. Run `npm run seed` only against a local database; it refuses remote URIs unless you pass `--allow-remote`.
+   `npm run seed:clubs` (clubs, admins, super admin) is the only seed command safe for production.
 3. Share `backend/output/club-admin-credentials.csv` privately, then delete it.
 4. Set `STUDENT_EMAIL_DOMAIN=pec.edu.in` and keep `REQUIRE_EMAIL_VERIFICATION=true`.

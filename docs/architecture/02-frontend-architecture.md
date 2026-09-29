@@ -6,15 +6,17 @@ src/
   lib/api.js            axios instance: baseURL /api/v1, credentials, X-Requested-With header
   lib/auth.js           homeFor(role), safeNext, password rule, branch list
   lib/categories.js     category/status/mode labels, icons, colours
+  lib/sentry.js         env-gated Sentry init (VITE_SENTRY_DSN) + error reporting helper
   redux/                authSlice only ({ user, ready })
   hooks/useFetch.js     GET + loading/error/reload; useDebounced
   hooks/useChatStream.js SSE client for /ai/chat (helpdesk + interview)
   components/ui/        button, input/textarea/select, dialog, tabs, dropdown, table…
-  components/layout/    AppLayout, Navbar, Footer, guards (RequireAuth), OtpInput, ChangePassword
+  components/layout/    AppLayout, Navbar, Footer, guards (RequireAuth), OtpInput, ChangePassword, ErrorBoundary
   components/clubs/     ClubCard, OpeningCard, EventCard, ClubLogo, badges, EmptyState
   components/chat/      ChatWindow, ChatLauncher (floating), AnswerChecker, BuddyEmpty
   pages/                Home, Clubs, ClubPage, Openings, OpeningPage, Events, MyApplications,
-                        Profile, Assistant, auth/*, admin/*
+                        Profile, Privacy, Assistant, auth/*, admin/* (Dashboard, Openings,
+                        Applicants, ClubEditor, Events, SuperAdmin with clubs/people/AI-usage tabs)
 ```
 
 - **State:** only the session lives in Redux. Page data is fetched per page with `useFetch`,
