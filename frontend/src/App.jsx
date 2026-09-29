@@ -13,6 +13,7 @@ import Openings from "@/pages/Openings";
 import OpeningPage from "@/pages/OpeningPage";
 import Events from "@/pages/Events";
 import MyApplications from "@/pages/MyApplications";
+import Privacy from "@/pages/Privacy";
 import NotFound from "@/pages/NotFound";
 import Login from "@/pages/auth/Login";
 import Signup from "@/pages/auth/Signup";
@@ -38,6 +39,7 @@ const router = createBrowserRouter([
       { path: "/openings", element: <Openings /> },
       { path: "/openings/:id", element: <OpeningPage /> },
       { path: "/events", element: <Events /> },
+      { path: "/privacy", element: <Privacy /> },
       { path: "/assistant", element: <Assistant /> },
       { path: "/login", element: <Login /> },
       { path: "/signup", element: <Signup /> },

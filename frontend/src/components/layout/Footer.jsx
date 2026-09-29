@@ -19,6 +19,7 @@ export default function Footer() {
             ["/clubs", "All clubs"],
             ["/openings", "Recruiting now"],
             ["/events", "Events"],
+            ["/privacy", "Privacy"],
           ]}
         />
         <FooterCol
