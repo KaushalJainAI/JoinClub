@@ -5,7 +5,7 @@ import { ArrowLeft, Download, Search, Sparkles, Check, X, Star, Mail, Phone, Fil
 import { useFetch, useDebounced } from "@/hooks/useFetch";
 import { api, API_BASE, errorMessage } from "@/lib/api";
 import { STATUS_META } from "@/lib/categories";
-import { cn, formatDate, relativeTime } from "@/lib/utils";
+import { cn, formatDate, formatDateTime, relativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/input";
@@ -87,6 +87,23 @@ function ApplicantPanel({ app, onChanged, onClose }) {
           <StatusBadge status={app.status} />
           <span className="text-xs text-muted-foreground">Applied {formatDate(app.createdAt)}</span>
         </div>
+
+        {app.history?.length > 0 && (
+          <div>
+            <p className="mb-1.5 text-sm font-semibold">Status history</p>
+            <ol className="space-y-1.5 border-l-2 border-muted pl-4">
+              {app.history.map((h, i) => (
+                <li key={`${h.status}-${h.at}-${i}`} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                  <StatusBadge status={h.status} />
+                  <span className="text-xs text-muted-foreground">
+                    {formatDateTime(h.at)}
+                    {h.by && ` · by ${typeof h.by === "object" ? h.by.fullname || h.by.email : "admin"}`}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
 
         {p.bio && <p className="rounded-xl bg-secondary/50 p-3 text-sm italic">“{p.bio}”</p>}
         {p.skills?.length > 0 && (
@@ -179,18 +196,24 @@ export default function Applicants() {
   const [status, setStatus] = useState("all");
   const [q, setQ] = useState("");
   const dq = useDebounced(q);
-  const query = new URLSearchParams({ ...(status !== "all" && { status }), ...(dq && { q: dq }) });
+  const [limit, setLimit] = useState(50);
+  const query = new URLSearchParams({ ...(status !== "all" && { status }), ...(dq && { q: dq }), limit });
   const { data, loading, setData } = useFetch(`/openings/${id}/applicants?${query}`);
-  const { data: all } = useFetch(`/openings/${id}/applicants`);
   const selectedId = params.get("app");
   const apps = data?.applications || [];
-  const selected = apps.find((a) => a._id === selectedId) || all?.applications.find((a) => a._id === selectedId);
-  const counts = (all?.applications || []).reduce((acc, a) => ((acc[a.status] = (acc[a.status] || 0) + 1), acc), {});
+  const selected = apps.find((a) => a._id === selectedId);
+  // Per-status totals for the whole opening come from the server, whatever the filter.
+  const counts = data?.counts || {};
 
   const open = (appId) => setParams(appId ? { app: appId } : {}, { replace: true });
 
   const onChanged = (updated) => {
-    setData((d) => ({ ...d, applications: d.applications.map((a) => (a._id === updated._id ? { ...a, status: updated.status, adminNote: updated.adminNote } : a)) }));
+    setData((d) => ({
+      ...d,
+      applications: d.applications.map((a) =>
+        a._id === updated._id ? { ...a, status: updated.status, adminNote: updated.adminNote, history: updated.history?.length ? updated.history : a.history } : a
+      ),
+    }));
   };
 
   return (
@@ -215,7 +238,7 @@ export default function Applicants() {
         <div className="flex gap-1 overflow-x-auto rounded-xl bg-muted p-1">
           {FILTERS.map((f) => (
             <button key={f} onClick={() => setStatus(f)} className={cn("shrink-0 rounded-lg px-3 py-1.5 text-sm font-semibold", status === f ? "bg-card shadow-sm" : "text-muted-foreground")}>
-              {f === "all" ? "All" : STATUS_META[f].label} <span className="text-xs opacity-60">{f === "all" ? all?.applications.length ?? "" : counts[f] || 0}</span>
+              {f === "all" ? "All" : STATUS_META[f].label} <span className="text-xs opacity-60">{f === "all" ? counts.all ?? "" : counts[f] || 0}</span>
             </button>
           ))}
         </div>
@@ -280,6 +303,14 @@ export default function Applicants() {
           </Table>
         )}
       </div>
+
+      {data && data.total > apps.length && (
+        <div className="text-center">
+          <Button variant="outline" onClick={() => setLimit((n) => Math.min(200, n + 50))} loading={loading}>
+            Load more ({data.total - apps.length} more)
+          </Button>
+        </div>
+      )}
 
       <Dialog open={Boolean(selected)} onOpenChange={(o) => !o && open(null)}>
         <DialogContent side="right" className="p-0">

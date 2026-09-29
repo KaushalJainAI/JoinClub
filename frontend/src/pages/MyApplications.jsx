@@ -5,7 +5,7 @@ import { FileText, Compass, Mic, Undo2 } from "lucide-react";
 import { useFetch } from "@/hooks/useFetch";
 import { api, errorMessage } from "@/lib/api";
 import { STATUS_META } from "@/lib/categories";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/misc";
 import { ClubLogo, StatusBadge, EmptyState, DeadlinePill } from "@/components/clubs/ClubBits";
@@ -25,6 +25,27 @@ function Timeline({ status }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// What happened and when. The server strips who changed it: naming the admin would
+// let a rejected student identify the person who rejected them.
+function HistoryList({ history }) {
+  if (!history?.length) return null;
+  return (
+    <details className="mt-3 text-sm">
+      <summary className="cursor-pointer font-medium text-muted-foreground hover:text-foreground">
+        History ({history.length})
+      </summary>
+      <ol className="mt-2 space-y-1.5 border-l-2 border-muted pl-4">
+        {history.map((h, i) => (
+          <li key={`${h.status}-${h.at}-${i}`} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+            <StatusBadge status={h.status} />
+            <span className="text-xs text-muted-foreground">{formatDateTime(h.at)}</span>
+          </li>
+        ))}
+      </ol>
+    </details>
   );
 }
 
@@ -106,6 +127,7 @@ export default function MyApplications() {
                 <StatusBadge status={a.status} />
               </div>
               <Timeline status={a.status} />
+              <HistoryList history={a.history} />
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 {a.opening && a.status !== "accepted" && a.status !== "rejected" && <DeadlinePill deadline={a.opening.deadline} className="mr-auto" />}
                 {a.status === "accepted" && <p className="mr-auto text-sm font-medium text-success">🎉 Welcome to {a.club?.shortName || a.club?.name}! Watch your email for next steps.</p>}
